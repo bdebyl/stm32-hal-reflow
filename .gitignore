@@ -1,0 +1,5 @@
+.mxproject
+Drivers/
+STM32F413VGTx_FLASH.ld
+build/
+startup_stm32f413xx.s
