@@ -1,0 +1,11 @@
+BUILD_DIR = build
+TARGET = stm32-hal-reflow
+
+OOCD         = $(shell command -v openocd)
+OOCD_IF      = interface/stlink.cfg
+OOCD_TG      = target/stm32f0x.cfg
+
+
+flash: $(BUILD_DIR)/$(TARGET).elf
+	@printf "  FLASH  $<\n"
+	$(OOCD) -f $(OOCD_IF) -f $(OOCD_TG) -c "program $< verify reset exit"
