@@ -1,6 +1,10 @@
 {
     "files.associations": {
         "main.h": "c",
-        "fatfs.h": "c"
-    }
+        "stm32f4xx.h": "c"
+    },
+    "editor.formatOnSave": true,
+    "doxdocgen.generic.authorName": "Bastian de Byl",
+    "doxdocgen.generic.authorEmail": "bastian@skudakrennsport.com",
+    "cortex-debug.variableUseNaturalFormat": false
 }
