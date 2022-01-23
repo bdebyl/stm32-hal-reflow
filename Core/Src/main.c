@@ -108,29 +108,16 @@ int main(void) {
   // Select instruction (low), not data (high)
   HAL_GPIO_WritePin(GPIO_LCD_RS_GPIO_Port, GPIO_LCD_RS_Pin, GPIO_PIN_SET);
   HAL_Delay(150);
-  LCD_Cmd(0x38);
-  HAL_Delay(100);
-  LCD_Cmd(0x38);
-  HAL_Delay(100);
-  LCD_Cmd(0x38);
-  HAL_Delay(100);
-  LCD_Cmd(0x08 | 0x04);
-  HAL_Delay(10);
-  LCD_Cmd(0x04 | 0x02);
-  HAL_Delay(10);
-  LCD_Cmd(0x01);
+  LCD_Cmd(0x0F);
+  HAL_Delay(150);
+  LCD_Cmd(0x30);
   // Select data (high), not instruction (low)
-  HAL_GPIO_WritePin(GPIO_LCD_RS_GPIO_Port, GPIO_LCD_RS_Pin, GPIO_PIN_RESET);
   HAL_Delay(100);
+  HAL_GPIO_WritePin(GPIO_LCD_RS_GPIO_Port, GPIO_LCD_RS_Pin, GPIO_PIN_RESET);
   char lcdStr[] = "Hello World!";
   int  i;
   for (i = 0; i < strlen(lcdStr); i++) {
-    GPIO_LCD_WritePort(lcdStr[i]);
-    HAL_Delay(10);
-    HAL_GPIO_WritePin(GPIO_LCD_E_GPIO_Port, GPIO_LCD_E_Pin, GPIO_PIN_RESET);
-    HAL_Delay(10);
-    HAL_GPIO_WritePin(GPIO_LCD_E_GPIO_Port, GPIO_LCD_E_Pin, GPIO_PIN_SET);
-    HAL_Delay(10);
+    LCD_Cmd(lcdStr[i]);
   }
   /* USER CODE END 2 */
 
