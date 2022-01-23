@@ -59,7 +59,14 @@ static void MX_USART1_UART_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
+static void LCD_Cmd(uint8_t data) {
+  GPIO_LCD_WritePort(0xFF | (~data));
+  HAL_Delay(10);
+  HAL_GPIO_WritePin(GPIO_LCD_E_GPIO_Port, GPIO_LCD_E_Pin, GPIO_PIN_RESET);
+  HAL_Delay(10);
+  HAL_GPIO_WritePin(GPIO_LCD_E_GPIO_Port, GPIO_LCD_E_Pin, GPIO_PIN_SET);
+  HAL_Delay(10);
+}
 /* USER CODE END 0 */
 
 /**
@@ -100,31 +107,23 @@ int main(void) {
   HAL_GPIO_WritePin(GPIO_LCD_RS_GPIO_Port, GPIO_LCD_RS_Pin, GPIO_PIN_SET);
   // Select instruction (low), not data (high)
   HAL_GPIO_WritePin(GPIO_LCD_RS_GPIO_Port, GPIO_LCD_RS_Pin, GPIO_PIN_SET);
-  // Clear the display
-  GPIO_LCD_WritePort(0x01);
+  HAL_Delay(150);
+  LCD_Cmd(0x38);
+  HAL_Delay(100);
+  LCD_Cmd(0x38);
+  HAL_Delay(100);
+  LCD_Cmd(0x38);
+  HAL_Delay(100);
+  LCD_Cmd(0x08 | 0x04);
   HAL_Delay(10);
-  HAL_GPIO_WritePin(GPIO_LCD_E_GPIO_Port, GPIO_LCD_E_Pin, GPIO_PIN_RESET);
+  LCD_Cmd(0x04 | 0x02);
   HAL_Delay(10);
-  HAL_GPIO_WritePin(GPIO_LCD_E_GPIO_Port, GPIO_LCD_E_Pin, GPIO_PIN_SET);
-  HAL_Delay(10);
-  // Return cursor home
-  GPIO_LCD_WritePort(0x02);
-  HAL_Delay(10);
-  HAL_GPIO_WritePin(GPIO_LCD_E_GPIO_Port, GPIO_LCD_E_Pin, GPIO_PIN_RESET);
-  HAL_Delay(10);
-  HAL_GPIO_WritePin(GPIO_LCD_E_GPIO_Port, GPIO_LCD_E_Pin, GPIO_PIN_SET);
-  HAL_Delay(10);
-  // Initialize display
-  GPIO_LCD_WritePort(0xF0);
-  HAL_Delay(10);
-  HAL_GPIO_WritePin(GPIO_LCD_E_GPIO_Port, GPIO_LCD_E_Pin, GPIO_PIN_RESET);
-  HAL_Delay(10);
-  HAL_GPIO_WritePin(GPIO_LCD_E_GPIO_Port, GPIO_LCD_E_Pin, GPIO_PIN_SET);
-  HAL_Delay(10);
+  LCD_Cmd(0x01);
   // Select data (high), not instruction (low)
   HAL_GPIO_WritePin(GPIO_LCD_RS_GPIO_Port, GPIO_LCD_RS_Pin, GPIO_PIN_RESET);
-  char *lcdStr = "Hello World!";
-  int   i;
+  HAL_Delay(100);
+  char lcdStr[] = "Hello World!";
+  int  i;
   for (i = 0; i < strlen(lcdStr); i++) {
     GPIO_LCD_WritePort(lcdStr[i]);
     HAL_Delay(10);
