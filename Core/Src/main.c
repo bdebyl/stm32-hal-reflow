@@ -60,7 +60,7 @@ static void MX_USART1_UART_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 static void LCD_Cmd(uint8_t data) {
-  GPIO_LCD_WritePort(0xFF | (~data));
+  GPIO_LCD_WritePort((0xFF & (~data)));
   HAL_Delay(10);
   HAL_GPIO_WritePin(GPIO_LCD_E_GPIO_Port, GPIO_LCD_E_Pin, GPIO_PIN_RESET);
   HAL_Delay(10);
@@ -108,16 +108,28 @@ int main(void) {
   // Select instruction (low), not data (high)
   HAL_GPIO_WritePin(GPIO_LCD_RS_GPIO_Port, GPIO_LCD_RS_Pin, GPIO_PIN_SET);
   HAL_Delay(150);
-  LCD_Cmd(0x0F);
+  LCD_Cmd(0x38 | 0x04); // Set line number and character feed
   HAL_Delay(150);
-  LCD_Cmd(0x30);
-  // Select data (high), not instruction (low)
+  LCD_Cmd(0x08 | 0x04); // Display ON, no cursor, no blink
+  HAL_Delay(150);
+  LCD_Cmd(0x02); // Return home
   HAL_Delay(100);
+  LCD_Cmd(0x01); // Clear display
+  // Select data (high), not instruction (low)
   HAL_GPIO_WritePin(GPIO_LCD_RS_GPIO_Port, GPIO_LCD_RS_Pin, GPIO_PIN_RESET);
-  char lcdStr[] = "Hello World!";
+  char lcdStr[]  = "Hello World!";
+  char lcdStr2[] = "How are you today?";
   int  i;
   for (i = 0; i < strlen(lcdStr); i++) {
     LCD_Cmd(lcdStr[i]);
+  }
+  HAL_GPIO_WritePin(GPIO_LCD_RS_GPIO_Port, GPIO_LCD_RS_Pin, GPIO_PIN_SET);
+  HAL_Delay(10);
+  LCD_Cmd(0x80 | 0x40);
+  HAL_GPIO_WritePin(GPIO_LCD_RS_GPIO_Port, GPIO_LCD_RS_Pin, GPIO_PIN_RESET);
+  HAL_Delay(10);
+  for (i = 0; i < strlen(lcdStr2); i++) {
+    LCD_Cmd(lcdStr2[i]);
   }
   /* USER CODE END 2 */
 
