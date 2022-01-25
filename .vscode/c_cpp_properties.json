@@ -10,11 +10,11 @@
             ],
             "defines": [
                 "USE_HAL_DRIVER",
-                "STM32F413xx"
+                "STM32F051x8"
             ],
             "compilerPath": "/usr/bin/arm-none-eabi-gcc",
             "compilerArgs": [
-                "-mcpu=cortex-m4"
+                "-mcpu=cortex-m0"
             ],
             "cStandard": "c99",
             "cppStandard": "c++14",

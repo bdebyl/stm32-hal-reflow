@@ -22,6 +22,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "lcd.h"
 #include <string.h>
 /* USER CODE END Includes */
 
@@ -54,19 +55,12 @@ static void MX_GPIO_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_USART1_UART_Init(void);
 /* USER CODE BEGIN PFP */
-
+static void MX_LCD_1_Init(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-static void LCD_Cmd(uint8_t data) {
-  GPIO_LCD_WritePort((0xFF & (~data)));
-  HAL_Delay(10);
-  HAL_GPIO_WritePin(GPIO_LCD_E_GPIO_Port, GPIO_LCD_E_Pin, GPIO_PIN_RESET);
-  HAL_Delay(10);
-  HAL_GPIO_WritePin(GPIO_LCD_E_GPIO_Port, GPIO_LCD_E_Pin, GPIO_PIN_SET);
-  HAL_Delay(10);
-}
+LCD_TypeDef LCD;
 /* USER CODE END 0 */
 
 /**
@@ -100,6 +94,8 @@ int main(void) {
   MX_SPI1_Init();
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
+  MX_LCD_1_Init();
+  /* OLD LCD CODE
   // NFET Logic Level Shiftin means 1 = 0; 0 = 1;
   // Re-set the display
   HAL_GPIO_WritePin(GPIO_LCD_E_GPIO_Port, GPIO_LCD_E_Pin, GPIO_PIN_SET);
@@ -131,6 +127,10 @@ int main(void) {
   for (i = 0; i < strlen(lcdStr2); i++) {
     LCD_Cmd(lcdStr2[i]);
   }
+  */
+
+  char lcdStr[] = "Hello World!";
+  LCD_WriteString(&LCD, lcdStr, strlen(lcdStr));
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -296,7 +296,28 @@ static void MX_GPIO_Init(void) {
 }
 
 /* USER CODE BEGIN 4 */
+static void MX_LCD_1_Init(void) {
+  LCD_InitTypeDef LCD_InitStruct = {0};
 
+  LCD_InitStruct.Columns         = 20;
+  LCD_InitStruct.Rows            = 2; // TODO(bastian): Currently unused
+  LCD_InitStruct.GPIODataPort    = GPIOB;
+  LCD_InitStruct.GPIORWPort      = GPIO_LCD_RW_GPIO_Port;
+  LCD_InitStruct.GPIORWPin       = GPIO_LCD_RW_Pin;
+  LCD_InitStruct.GPIOEnPort      = GPIO_LCD_E_GPIO_Port;
+  LCD_InitStruct.GPIOEnPin       = GPIO_LCD_E_Pin;
+  LCD_InitStruct.GPIORSPort      = GPIO_LCD_RS_GPIO_Port;
+  LCD_InitStruct.GPIORSPin       = GPIO_LCD_RS_Pin;
+
+  LCD_InitStruct.EntryModeSet    = LCD_INST_EMS_ID | LCD_INST_EMS_S;
+  LCD_InitStruct.FunctionSet     = LCD_INST_FSET_DL | LCD_INST_FSET_F;
+  LCD_InitStruct.DisplayMode     = LCD_INST_DISP_ON;
+  LCD_InitStruct.CursorBehavior  = 0x00;
+
+  LCD_InitStruct.GPIOState       = LCD_GPIO_INVERTED;
+
+  LCD_Init(&LCD, &LCD_InitStruct);
+}
 /* USER CODE END 4 */
 
 /**

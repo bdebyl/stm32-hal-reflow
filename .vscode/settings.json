@@ -1,10 +1,10 @@
 {
     "files.associations": {
         "main.h": "c",
-        "stm32f4xx.h": "c"
+        "stm32f0xx.h": "c"
     },
     "editor.formatOnSave": true,
     "doxdocgen.generic.authorName": "Bastian de Byl",
-    "doxdocgen.generic.authorEmail": "bastian@skudakrennsport.com",
+    "doxdocgen.generic.authorEmail": "bastian@bdebyl.net",
     "cortex-debug.variableUseNaturalFormat": false
 }
