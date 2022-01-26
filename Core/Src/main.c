@@ -61,6 +61,15 @@ static void MX_LCD_1_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 LCD_TypeDef LCD;
+static void LCD_Cmd(uint8_t data) {
+  GPIO_LCD_WritePort((0xFF & (~data)));
+  HAL_Delay(10);
+  HAL_GPIO_WritePin(GPIO_LCD_E_GPIO_Port, GPIO_LCD_E_Pin, GPIO_PIN_RESET);
+  HAL_Delay(10);
+  HAL_GPIO_WritePin(GPIO_LCD_E_GPIO_Port, GPIO_LCD_E_Pin, GPIO_PIN_SET);
+  HAL_Delay(10);
+}
+
 /* USER CODE END 0 */
 
 /**
@@ -94,8 +103,8 @@ int main(void) {
   MX_SPI1_Init();
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
-  MX_LCD_1_Init();
-  /* OLD LCD CODE
+  // MX_LCD_1_Init();
+  //  OLD LCD CODE
   // NFET Logic Level Shiftin means 1 = 0; 0 = 1;
   // Re-set the display
   HAL_GPIO_WritePin(GPIO_LCD_E_GPIO_Port, GPIO_LCD_E_Pin, GPIO_PIN_SET);
@@ -127,10 +136,11 @@ int main(void) {
   for (i = 0; i < strlen(lcdStr2); i++) {
     LCD_Cmd(lcdStr2[i]);
   }
-  */
 
-  char lcdStr[] = "Hello World!";
-  LCD_WriteString(&LCD, lcdStr, strlen(lcdStr));
+  /*char lcdStr[] = "Hello World!";
+  if (LCD_WriteString(&LCD, lcdStr, strlen(lcdStr)) != HAL_OK) {
+    Error_Handler();
+  } */
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -309,12 +319,15 @@ static void MX_LCD_1_Init(void) {
   LCD_InitStruct.GPIORSPort      = GPIO_LCD_RS_GPIO_Port;
   LCD_InitStruct.GPIORSPin       = GPIO_LCD_RS_Pin;
 
-  LCD_InitStruct.EntryModeSet    = LCD_INST_EMS_ID | LCD_INST_EMS_S;
-  LCD_InitStruct.FunctionSet     = LCD_INST_FSET_DL | LCD_INST_FSET_F;
-  LCD_InitStruct.DisplayMode     = LCD_INST_DISP_ON;
-  LCD_InitStruct.CursorBehavior  = 0x00;
+  /*   LCD_InitStruct.EntryModeSet    = LCD_INST_EMS_ID | LCD_INST_EMS_S; */
+  LCD_InitStruct.FunctionSet =
+      LCD_INST_FSET_DL | LCD_INST_FSET_F | LCD_INST_FSET_N;
+  LCD_InitStruct.DisplayMode = LCD_INST_DISP_ON;
+  /*   LCD_InitStruct.CursorBehavior    = 0x00; */
 
-  LCD_InitStruct.GPIOState       = LCD_GPIO_INVERTED;
+  LCD_InitStruct.GPIOState         = LCD_GPIO_INVERTED;
+  LCD_PositionTypeDef LCD_InitPost = {.Row = LCD_ROW_1, .Column = 0};
+  LCD_InitStruct.InitPosition      = LCD_InitPost;
 
   LCD_Init(&LCD, &LCD_InitStruct);
 }

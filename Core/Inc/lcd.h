@@ -15,7 +15,7 @@
 #endif // STM32F0x8
 
 /* Defines */
-#define LCD_DELAY          (1)
+#define LCD_DELAY          (100)
 
 #define LCD_WRMODE_READ    (GPIO_PIN_RESET)
 #define LCD_WRMODE_WRITE   (GPIO_PIN_SET)
@@ -83,10 +83,11 @@ typedef struct {
 } LCD_TypeDef;
 
 /* Exported Function Prototypes */
-void LCD_Init(LCD_TypeDef *LCD, LCD_InitTypeDef *LCD_Init);
-void LCD_WritePort(LCD_TypeDef *LCD, uint8_t Data);
-void LCD_WriteString(LCD_TypeDef *LCD, char *String, size_t StringLen);
-void LCD_WriteChar(LCD_TypeDef *LCD, char *Character);
+void              LCD_Init(LCD_TypeDef *LCD, LCD_InitTypeDef *LCD_Init);
+void              LCD_WritePort(LCD_TypeDef *LCD, uint8_t Data);
+HAL_StatusTypeDef LCD_WriteString(LCD_TypeDef *LCD, char *String,
+                                  size_t StringLen);
+HAL_StatusTypeDef LCD_WriteChar(LCD_TypeDef *LCD, char *Character);
 HAL_StatusTypeDef LCD_SetCursorPosition(LCD_TypeDef        *LCD,
                                         LCD_PositionTypeDef Position);
 void              LCD_SetEnable(LCD_TypeDef *LCD, GPIO_PinState Enable);

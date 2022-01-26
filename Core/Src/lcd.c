@@ -28,9 +28,9 @@ void LCD_Init(LCD_TypeDef *LCD, LCD_InitTypeDef *LCD_Init) {
   LCD_SetRegisterSelect(LCD, LCD_RSMODE_INST);
 
   LCD_WritePort(LCD, LCD_INST_FSET | LCD_Init->FunctionSet);
-  LCD_WritePort(LCD, LCD_INST_EMS | LCD_Init->EntryModeSet);
+  /*   LCD_WritePort(LCD, LCD_INST_EMS | LCD_Init->EntryModeSet); */
   LCD_WritePort(LCD, LCD_INST_DISP | LCD_Init->DisplayMode);
-  LCD_WritePort(LCD, LCD_INST_DCS | LCD_Init->CursorBehavior);
+  /*   LCD_WritePort(LCD, LCD_INST_DCS | LCD_Init->CursorBehavior); */
   LCD_WritePort(LCD, LCD_INST_CLR);
 
   // Set initial cursor position
@@ -38,7 +38,9 @@ void LCD_Init(LCD_TypeDef *LCD, LCD_InitTypeDef *LCD_Init) {
       (LCD_Init->InitPosition.Row == LCD_ROW_1)) {
     LCD_WritePort(LCD, LCD_INST_HOM);
   }
-  LCD_SetCursorPosition(LCD, LCD_Init->InitPosition);
+  // LCD_SetCursorPosition(LCD, LCD_Init->InitPosition);
+  LCD->CurrentPosition->Column = 0;
+  LCD->CurrentPosition->Row    = LCD_ROW_1;
 }
 
 void LCD_WritePort(LCD_TypeDef *LCD, uint8_t Data) {
@@ -62,44 +64,50 @@ void LCD_WritePort(LCD_TypeDef *LCD, uint8_t Data) {
 }
 
 void LCD_SetEnable(LCD_TypeDef *LCD, GPIO_PinState Enable) {
-  GPIO_PinState _enable;
+  GPIO_PinState _enable = Enable;
 
-  switch (LCD->Inverted) {
-  case LCD_GPIO_INVERTED:
-    _enable = ~(Enable);
-    break;
-  default:
-    _enable = Enable;
-    break;
+  if (LCD->Inverted == LCD_GPIO_INVERTED) {
+    switch (_enable) {
+    case GPIO_PIN_SET:
+      _enable = GPIO_PIN_RESET;
+      break;
+    default:
+      _enable = GPIO_PIN_SET;
+      break;
+    }
   }
 
   HAL_GPIO_WritePin(LCD->EnPort, LCD->EnPin, _enable);
 }
 
 void LCD_SetReadWrite(LCD_TypeDef *LCD, GPIO_PinState RWMode) {
-  uint8_t _rwMode;
+  uint8_t _rwMode = RWMode;
 
-  switch (LCD->Inverted) {
-  case LCD_GPIO_INVERTED:
-    _rwMode = ~(RWMode);
-    break;
-  default:
-    _rwMode = RWMode;
-    break;
+  if (LCD->Inverted == LCD_GPIO_INVERTED) {
+    switch (_rwMode) {
+    case GPIO_PIN_SET:
+      _rwMode = GPIO_PIN_RESET;
+      break;
+    default:
+      _rwMode = GPIO_PIN_SET;
+      break;
+    }
   }
 
   HAL_GPIO_WritePin(LCD->RWPort, LCD->RWPin, _rwMode);
 }
 void LCD_SetRegisterSelect(LCD_TypeDef *LCD, GPIO_PinState RSMode) {
-  uint8_t _rsMode;
+  uint8_t _rsMode = RSMode;
 
-  switch (LCD->Inverted) {
-  case LCD_GPIO_INVERTED:
-    _rsMode = ~(RSMode);
-    break;
-  default:
-    _rsMode = RSMode;
-    break;
+  if (LCD->Inverted == LCD_GPIO_INVERTED) {
+    switch (_rsMode) {
+    case GPIO_PIN_SET:
+      _rsMode = GPIO_PIN_RESET;
+      break;
+    default:
+      _rsMode = GPIO_PIN_SET;
+      break;
+    }
   }
 
   HAL_GPIO_WritePin(LCD->RSPort, LCD->RSPin, _rsMode);
@@ -120,7 +128,9 @@ HAL_StatusTypeDef LCD_SetCursorPosition(LCD_TypeDef        *LCD,
   return HAL_OK;
 }
 
-void LCD_WriteChar(LCD_TypeDef *LCD, char *Character) {
+HAL_StatusTypeDef LCD_WriteChar(LCD_TypeDef *LCD, char *Character) {
+  HAL_StatusTypeDef ret = HAL_OK;
+
   // Ensure we're always in the right mode
   LCD_SetRegisterSelect(LCD, LCD_RSMODE_DATA);
   LCD_SetReadWrite(LCD, LCD_WRMODE_WRITE);
@@ -140,7 +150,7 @@ void LCD_WriteChar(LCD_TypeDef *LCD, char *Character) {
       break;
     }
 
-    LCD_SetCursorPosition(LCD, newPos);
+    ret = LCD_SetCursorPosition(LCD, newPos);
   }
 
   // Write the character to the screen
@@ -148,11 +158,21 @@ void LCD_WriteChar(LCD_TypeDef *LCD, char *Character) {
 
   // Increment the column position
   LCD->CurrentPosition->Column++;
+
+  return ret;
 }
 
-void LCD_WriteString(LCD_TypeDef *LCD, char *String, size_t StringLen) {
-  size_t i;
+HAL_StatusTypeDef LCD_WriteString(LCD_TypeDef *LCD, char *String,
+                                  size_t StringLen) {
+  HAL_StatusTypeDef status = HAL_OK;
+  size_t            i;
   for (i = 0; i < StringLen; i++) {
-    LCD_WriteChar(LCD, &String[i]);
+    status = LCD_WriteChar(LCD, &String[i]);
+
+    if (status != HAL_OK) {
+      return status;
+    }
   }
+
+  return status;
 }
