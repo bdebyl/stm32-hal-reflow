@@ -15,12 +15,14 @@
 #endif // STM32F0x8
 
 /* Defines */
-#define LCD_DELAY          (100)
+#define LCD_DELAY          (2)
 
-#define LCD_WRMODE_READ    (GPIO_PIN_RESET)
-#define LCD_WRMODE_WRITE   (GPIO_PIN_SET)
+#define LCD_WRMODE_WRITE   (GPIO_PIN_RESET)
+#define LCD_WRMODE_READ    (GPIO_PIN_SET)
 #define LCD_RSMODE_INST    (GPIO_PIN_RESET)
 #define LCD_RSMODE_DATA    (GPIO_PIN_SET)
+#define LCD_DISABLE        (GPIO_PIN_RESET)
+#define LCD_ENABLE         (GPIO_PIN_SET)
 
 #define LCD_INST_CLR       (0x01U) // Clear entire display
 #define LCD_INST_HOM       (0x02U) // Restore cursor home
@@ -69,27 +71,28 @@ typedef struct {
 } LCD_InitTypeDef;
 
 typedef struct {
-  GPIO_TypeDef        *DataPort; // Always assume data port is in sequence
-  GPIO_TypeDef        *RWPort;
-  uint32_t             RWPin;
-  GPIO_TypeDef        *EnPort;
-  uint32_t             EnPin;
-  GPIO_TypeDef        *RSPort;
-  uint32_t             RSPin;
-  LCD_PositionTypeDef *CurrentPosition;
-  LCD_GPIOState        Inverted;
-  uint8_t              _columns;
-  uint8_t              _rows;
+  GPIO_TypeDef       *DataPort; // Always assume data port is in sequence
+  GPIO_TypeDef       *RWPort;
+  uint32_t            RWPin;
+  GPIO_TypeDef       *EnPort;
+  uint32_t            EnPin;
+  GPIO_TypeDef       *RSPort;
+  uint32_t            RSPin;
+  LCD_PositionTypeDef CurrentPosition;
+  LCD_GPIOState       Inverted;
+  uint8_t             _columns;
+  uint8_t             _rows;
 } LCD_TypeDef;
 
 /* Exported Function Prototypes */
 void              LCD_Init(LCD_TypeDef *LCD, LCD_InitTypeDef *LCD_Init);
-void              LCD_WritePort(LCD_TypeDef *LCD, uint8_t Data);
+void              LCD_WritePort(LCD_TypeDef *LCD, char Data);
 HAL_StatusTypeDef LCD_WriteString(LCD_TypeDef *LCD, char *String,
                                   size_t StringLen);
-HAL_StatusTypeDef LCD_WriteChar(LCD_TypeDef *LCD, char *Character);
+HAL_StatusTypeDef LCD_WriteChar(LCD_TypeDef *LCD, char Character);
 HAL_StatusTypeDef LCD_SetCursorPosition(LCD_TypeDef        *LCD,
                                         LCD_PositionTypeDef Position);
+HAL_StatusTypeDef LCD_GoToNextRow(LCD_TypeDef *LCD, uint8_t Column);
 void              LCD_SetEnable(LCD_TypeDef *LCD, GPIO_PinState Enable);
 void              LCD_SetReadWrite(LCD_TypeDef *LCD, GPIO_PinState RWMode);
 void              LCD_SetRegisterSelect(LCD_TypeDef *LCD, GPIO_PinState RSMode);

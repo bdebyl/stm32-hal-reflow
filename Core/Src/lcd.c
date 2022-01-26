@@ -23,27 +23,27 @@ void LCD_Init(LCD_TypeDef *LCD, LCD_InitTypeDef *LCD_Init) {
   LCD->Inverted = LCD_Init->GPIOState;
 
   // Initialize Sequence for LCD
-  LCD_SetEnable(LCD, GPIO_PIN_RESET);
+  LCD_SetEnable(LCD, LCD_DISABLE);
   LCD_SetReadWrite(LCD, LCD_WRMODE_WRITE);
   LCD_SetRegisterSelect(LCD, LCD_RSMODE_INST);
 
   LCD_WritePort(LCD, LCD_INST_FSET | LCD_Init->FunctionSet);
-  /*   LCD_WritePort(LCD, LCD_INST_EMS | LCD_Init->EntryModeSet); */
   LCD_WritePort(LCD, LCD_INST_DISP | LCD_Init->DisplayMode);
-  /*   LCD_WritePort(LCD, LCD_INST_DCS | LCD_Init->CursorBehavior); */
   LCD_WritePort(LCD, LCD_INST_CLR);
 
   // Set initial cursor position
-  if ((LCD_Init->InitPosition.Column == 0) &&
-      (LCD_Init->InitPosition.Row == LCD_ROW_1)) {
+  LCD->CurrentPosition.Column = LCD_Init->InitPosition.Column;
+  LCD->CurrentPosition.Row    = LCD_Init->InitPosition.Row;
+
+  if ((LCD->CurrentPosition.Column == 0) &&
+      (LCD->CurrentPosition.Row == LCD_ROW_1)) {
     LCD_WritePort(LCD, LCD_INST_HOM);
+  } else {
+    LCD_SetCursorPosition(LCD, LCD_Init->InitPosition);
   }
-  // LCD_SetCursorPosition(LCD, LCD_Init->InitPosition);
-  LCD->CurrentPosition->Column = 0;
-  LCD->CurrentPosition->Row    = LCD_ROW_1;
 }
 
-void LCD_WritePort(LCD_TypeDef *LCD, uint8_t Data) {
+void LCD_WritePort(LCD_TypeDef *LCD, char Data) {
   uint8_t _data;
 
   switch (LCD->Inverted) {
@@ -116,50 +116,74 @@ void LCD_SetRegisterSelect(LCD_TypeDef *LCD, GPIO_PinState RSMode) {
 HAL_StatusTypeDef LCD_SetCursorPosition(LCD_TypeDef        *LCD,
                                         LCD_PositionTypeDef Position) {
   if (Position.Column < LCD->_columns) {
-    LCD->CurrentPosition->Column = Position.Column;
+    LCD->CurrentPosition.Column = Position.Column;
   } else {
     return HAL_ERROR;
   }
-  LCD->CurrentPosition->Row = Position.Row;
+  LCD->CurrentPosition.Row = Position.Row;
 
-  LCD_WritePort(LCD, LCD_INST_DDRAM | (LCD->CurrentPosition->Row +
-                                       LCD->CurrentPosition->Column));
+  LCD_SetRegisterSelect(LCD, LCD_RSMODE_INST);
+  LCD_WritePort(LCD, LCD_INST_DDRAM | (LCD->CurrentPosition.Row +
+                                       LCD->CurrentPosition.Column));
 
   return HAL_OK;
 }
 
-HAL_StatusTypeDef LCD_WriteChar(LCD_TypeDef *LCD, char *Character) {
-  HAL_StatusTypeDef ret = HAL_OK;
+HAL_StatusTypeDef LCD_GoToNextRow(LCD_TypeDef *LCD, uint8_t Column) {
+  LCD_PositionTypeDef newPos;
 
-  // Ensure we're always in the right mode
-  LCD_SetRegisterSelect(LCD, LCD_RSMODE_DATA);
+  newPos.Column = Column;
+  switch (LCD->CurrentPosition.Row) {
+  case LCD_ROW_1:
+    newPos.Row = LCD_ROW_2;
+    break;
+  default:
+    newPos.Row = LCD_ROW_1;
+    break;
+  }
+
+  if (LCD_SetCursorPosition(LCD, newPos) != HAL_OK) {
+    return HAL_ERROR;
+  }
+
+  return HAL_OK;
+}
+
+HAL_StatusTypeDef LCD_WriteChar(LCD_TypeDef *LCD, char Character) {
+  // Ensure we set it to write
   LCD_SetReadWrite(LCD, LCD_WRMODE_WRITE);
 
   // Check if current position would overflow
-  if (LCD->CurrentPosition->Column >= LCD->_columns) {
-    // Wrap to next row
-    LCD_PositionTypeDef newPos;
-
-    newPos.Column = 0x00;
-    switch (LCD->CurrentPosition->Row) {
-    case LCD_ROW_1:
-      newPos.Row = LCD_ROW_2;
-      break;
-    default:
-      newPos.Row = LCD_ROW_1;
-      break;
+  if (LCD->CurrentPosition.Column >= LCD->_columns) {
+    if (LCD_GoToNextRow(LCD, 0) != HAL_OK) {
+      return HAL_ERROR;
     }
-
-    ret = LCD_SetCursorPosition(LCD, newPos);
   }
 
-  // Write the character to the screen
-  LCD_WritePort(LCD, (uint8_t)*Character);
+  switch (Character) {
+  case '\r':
+    LCD->CurrentPosition.Column = 0;
+    if (LCD_SetCursorPosition(LCD, LCD->CurrentPosition) != HAL_OK) {
+      return HAL_ERROR;
+    }
+    break;
+  case '\n':
+    if (LCD_GoToNextRow(LCD, LCD->CurrentPosition.Column) != HAL_OK) {
+      return HAL_ERROR;
+    }
+    break;
+  default:
+    // Ensure re-set to data
+    LCD_SetRegisterSelect(LCD, LCD_RSMODE_DATA);
+    // Write the character to the screen
+    LCD_WritePort(LCD, Character);
 
-  // Increment the column position
-  LCD->CurrentPosition->Column++;
+    // Increment the column position
+    LCD->CurrentPosition.Column++;
+    break;
+  }
 
-  return ret;
+  return HAL_OK;
 }
 
 HAL_StatusTypeDef LCD_WriteString(LCD_TypeDef *LCD, char *String,
@@ -167,7 +191,7 @@ HAL_StatusTypeDef LCD_WriteString(LCD_TypeDef *LCD, char *String,
   HAL_StatusTypeDef status = HAL_OK;
   size_t            i;
   for (i = 0; i < StringLen; i++) {
-    status = LCD_WriteChar(LCD, &String[i]);
+    status = LCD_WriteChar(LCD, String[i]);
 
     if (status != HAL_OK) {
       return status;

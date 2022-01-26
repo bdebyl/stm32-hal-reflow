@@ -60,16 +60,7 @@ static void MX_LCD_1_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-LCD_TypeDef LCD;
-static void LCD_Cmd(uint8_t data) {
-  GPIO_LCD_WritePort((0xFF & (~data)));
-  HAL_Delay(10);
-  HAL_GPIO_WritePin(GPIO_LCD_E_GPIO_Port, GPIO_LCD_E_Pin, GPIO_PIN_RESET);
-  HAL_Delay(10);
-  HAL_GPIO_WritePin(GPIO_LCD_E_GPIO_Port, GPIO_LCD_E_Pin, GPIO_PIN_SET);
-  HAL_Delay(10);
-}
-
+static LCD_TypeDef LCD = {0};
 /* USER CODE END 0 */
 
 /**
@@ -103,44 +94,11 @@ int main(void) {
   MX_SPI1_Init();
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
-  // MX_LCD_1_Init();
-  //  OLD LCD CODE
-  // NFET Logic Level Shiftin means 1 = 0; 0 = 1;
-  // Re-set the display
-  HAL_GPIO_WritePin(GPIO_LCD_E_GPIO_Port, GPIO_LCD_E_Pin, GPIO_PIN_SET);
-  HAL_GPIO_WritePin(GPIO_LCD_RW_GPIO_Port, GPIO_LCD_RW_Pin, GPIO_PIN_SET);
-  HAL_GPIO_WritePin(GPIO_LCD_RS_GPIO_Port, GPIO_LCD_RS_Pin, GPIO_PIN_SET);
-  // Select instruction (low), not data (high)
-  HAL_GPIO_WritePin(GPIO_LCD_RS_GPIO_Port, GPIO_LCD_RS_Pin, GPIO_PIN_SET);
-  HAL_Delay(150);
-  LCD_Cmd(0x38 | 0x04); // Set line number and character feed
-  HAL_Delay(150);
-  LCD_Cmd(0x08 | 0x04); // Display ON, no cursor, no blink
-  HAL_Delay(150);
-  LCD_Cmd(0x02); // Return home
-  HAL_Delay(100);
-  LCD_Cmd(0x01); // Clear display
-  // Select data (high), not instruction (low)
-  HAL_GPIO_WritePin(GPIO_LCD_RS_GPIO_Port, GPIO_LCD_RS_Pin, GPIO_PIN_RESET);
-  char lcdStr[]  = "Hello World!";
-  char lcdStr2[] = "How are you today?";
-  int  i;
-  for (i = 0; i < strlen(lcdStr); i++) {
-    LCD_Cmd(lcdStr[i]);
-  }
-  HAL_GPIO_WritePin(GPIO_LCD_RS_GPIO_Port, GPIO_LCD_RS_Pin, GPIO_PIN_SET);
-  HAL_Delay(10);
-  LCD_Cmd(0x80 | 0x40);
-  HAL_GPIO_WritePin(GPIO_LCD_RS_GPIO_Port, GPIO_LCD_RS_Pin, GPIO_PIN_RESET);
-  HAL_Delay(10);
-  for (i = 0; i < strlen(lcdStr2); i++) {
-    LCD_Cmd(lcdStr2[i]);
-  }
-
-  /*char lcdStr[] = "Hello World!";
+  MX_LCD_1_Init();
+  char lcdStr[] = "Hello world! How are you today?";
   if (LCD_WriteString(&LCD, lcdStr, strlen(lcdStr)) != HAL_OK) {
     Error_Handler();
-  } */
+  }
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -255,7 +213,6 @@ static void MX_USART1_UART_Init(void) {
     Error_Handler();
   }
   /* USER CODE BEGIN USART1_Init 2 */
-
   /* USER CODE END USART1_Init 2 */
 }
 
@@ -325,9 +282,9 @@ static void MX_LCD_1_Init(void) {
   LCD_InitStruct.DisplayMode = LCD_INST_DISP_ON;
   /*   LCD_InitStruct.CursorBehavior    = 0x00; */
 
-  LCD_InitStruct.GPIOState         = LCD_GPIO_INVERTED;
-  LCD_PositionTypeDef LCD_InitPost = {.Row = LCD_ROW_1, .Column = 0};
-  LCD_InitStruct.InitPosition      = LCD_InitPost;
+  LCD_InitStruct.GPIOState        = LCD_GPIO_INVERTED;
+  LCD_PositionTypeDef LCD_InitPos = {.Row = LCD_ROW_1, .Column = 0};
+  LCD_InitStruct.InitPosition     = LCD_InitPos;
 
   LCD_Init(&LCD, &LCD_InitStruct);
 }
