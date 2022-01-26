@@ -23,7 +23,9 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "lcd.h"
+#include <stdio.h>
 #include <string.h>
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -95,7 +97,10 @@ int main(void) {
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
   MX_LCD_1_Init();
-  char lcdStr[] = "Temperature: ";
+  const char *fmtStr = "Temperature: %3d°C";
+  char        lcdStr[strlen(fmtStr) + 1];
+  sprintf(lcdStr, fmtStr, 20);
+
   if (LCD_WriteString(&LCD, lcdStr, strlen(lcdStr)) != HAL_OK) {
     Error_Handler();
   }
