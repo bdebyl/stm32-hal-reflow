@@ -95,7 +95,7 @@ int main(void) {
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
   MX_LCD_1_Init();
-  char lcdStr[] = "Hello world! How are you today?";
+  char lcdStr[] = "Temperature: ";
   if (LCD_WriteString(&LCD, lcdStr, strlen(lcdStr)) != HAL_OK) {
     Error_Handler();
   }
@@ -263,6 +263,12 @@ static void MX_GPIO_Init(void) {
 }
 
 /* USER CODE BEGIN 4 */
+
+/**
+ * @brief LCD 1 Initialization function
+ * @param None
+ * @retval None
+ */
 static void MX_LCD_1_Init(void) {
   LCD_InitTypeDef LCD_InitStruct = {0};
 
@@ -288,6 +294,7 @@ static void MX_LCD_1_Init(void) {
 
   LCD_Init(&LCD, &LCD_InitStruct);
 }
+
 /* USER CODE END 4 */
 
 /**
