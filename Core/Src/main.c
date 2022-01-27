@@ -45,10 +45,13 @@
 /* Private variables ---------------------------------------------------------*/
 SPI_HandleTypeDef  hspi1;
 
+TIM_HandleTypeDef  htim14;
+
 UART_HandleTypeDef huart1;
 
 /* USER CODE BEGIN PV */
 
+static uint8_t tcSPIData[4]; // 32-bits
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -56,6 +59,7 @@ void        SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_USART1_UART_Init(void);
+static void MX_TIM14_Init(void);
 /* USER CODE BEGIN PFP */
 static void MX_LCD_1_Init(void);
 /* USER CODE END PFP */
@@ -95,13 +99,17 @@ int main(void) {
   MX_GPIO_Init();
   MX_SPI1_Init();
   MX_USART1_UART_Init();
+  MX_TIM14_Init();
   /* USER CODE BEGIN 2 */
   MX_LCD_1_Init();
-  const char *fmtStr = "Temperature: %3d°C";
-  char        lcdStr[strlen(fmtStr) + 1];
-  sprintf(lcdStr, fmtStr, 20);
 
-  if (LCD_WriteString(&LCD, lcdStr, strlen(lcdStr)) != HAL_OK) {
+  const char *fmtStr = "%3dC";
+  char        lcdStr[7 + 1];
+  memset(lcdStr, ' ', 5);
+  int16_t             temperature = 0;
+  char               *tempStr     = "Temperature: ";
+  LCD_PositionTypeDef tempPos = {.Column = strlen(tempStr), .Row = LCD_ROW_1};
+  if (LCD_WriteString(&LCD, tempStr, strlen(tempStr)) != HAL_OK) {
     Error_Handler();
   }
   /* USER CODE END 2 */
@@ -110,7 +118,10 @@ int main(void) {
   /* USER CODE BEGIN WHILE */
   while (1) {
     /* USER CODE END WHILE */
-
+    sprintf(lcdStr, fmtStr, temperature);
+    LCD_SetCursorPosition(&LCD, tempPos);
+    LCD_WriteString(&LCD, lcdStr, strlen(lcdStr));
+    HAL_Delay(500);
     /* USER CODE BEGIN 3 */
   }
   /* USER CODE END 3 */
@@ -128,10 +139,12 @@ void SystemClock_Config(void) {
   /** Initializes the RCC Oscillators according to the specified parameters
    * in the RCC_OscInitTypeDef structure.
    */
-  RCC_OscInitStruct.OscillatorType      = RCC_OSCILLATORTYPE_HSI;
-  RCC_OscInitStruct.HSIState            = RCC_HSI_ON;
-  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
-  RCC_OscInitStruct.PLL.PLLState        = RCC_PLL_NONE;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.HSEState       = RCC_HSE_ON;
+  RCC_OscInitStruct.PLL.PLLState   = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource  = RCC_PLLSOURCE_HSE;
+  RCC_OscInitStruct.PLL.PLLMUL     = RCC_PLL_MUL6;
+  RCC_OscInitStruct.PLL.PREDIV     = RCC_PREDIV_DIV1;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK) {
     Error_Handler();
   }
@@ -139,11 +152,11 @@ void SystemClock_Config(void) {
    */
   RCC_ClkInitStruct.ClockType =
       RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK | RCC_CLOCKTYPE_PCLK1;
-  RCC_ClkInitStruct.SYSCLKSource   = RCC_SYSCLKSOURCE_HSI;
+  RCC_ClkInitStruct.SYSCLKSource   = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.AHBCLKDivider  = RCC_SYSCLK_DIV1;
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
 
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_0) != HAL_OK) {
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_1) != HAL_OK) {
     Error_Handler();
   }
   PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_USART1;
@@ -171,23 +184,54 @@ static void MX_SPI1_Init(void) {
   hspi1.Instance               = SPI1;
   hspi1.Init.Mode              = SPI_MODE_MASTER;
   hspi1.Init.Direction         = SPI_DIRECTION_2LINES;
-  hspi1.Init.DataSize          = SPI_DATASIZE_4BIT;
+  hspi1.Init.DataSize          = SPI_DATASIZE_8BIT;
   hspi1.Init.CLKPolarity       = SPI_POLARITY_LOW;
   hspi1.Init.CLKPhase          = SPI_PHASE_1EDGE;
   hspi1.Init.NSS               = SPI_NSS_SOFT;
-  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_2;
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_32;
   hspi1.Init.FirstBit          = SPI_FIRSTBIT_MSB;
   hspi1.Init.TIMode            = SPI_TIMODE_DISABLE;
   hspi1.Init.CRCCalculation    = SPI_CRCCALCULATION_DISABLE;
   hspi1.Init.CRCPolynomial     = 7;
   hspi1.Init.CRCLength         = SPI_CRC_LENGTH_DATASIZE;
-  hspi1.Init.NSSPMode          = SPI_NSS_PULSE_ENABLE;
+  hspi1.Init.NSSPMode          = SPI_NSS_PULSE_DISABLE;
   if (HAL_SPI_Init(&hspi1) != HAL_OK) {
     Error_Handler();
   }
   /* USER CODE BEGIN SPI1_Init 2 */
 
   /* USER CODE END SPI1_Init 2 */
+}
+
+/**
+ * @brief TIM14 Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_TIM14_Init(void) {
+
+  /* USER CODE BEGIN TIM14_Init 0 */
+
+  /* USER CODE END TIM14_Init 0 */
+
+  /* USER CODE BEGIN TIM14_Init 1 */
+
+  /* USER CODE END TIM14_Init 1 */
+  htim14.Instance               = TIM14;
+  htim14.Init.Prescaler         = 4801;
+  htim14.Init.CounterMode       = TIM_COUNTERMODE_UP;
+  htim14.Init.Period            = 999;
+  htim14.Init.ClockDivision     = TIM_CLOCKDIVISION_DIV1;
+  htim14.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim14) != HAL_OK) {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM14_Init 2 */
+  if (HAL_TIM_Base_Start_IT(&htim14) != HAL_OK) {
+    Error_Handler();
+  }
+
+  /* USER CODE END TIM14_Init 2 */
 }
 
 /**
@@ -300,6 +344,12 @@ static void MX_LCD_1_Init(void) {
   LCD_Init(&LCD, &LCD_InitStruct);
 }
 
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
+  if (htim->Instance == TIM14) {
+    HAL_GPIO_WritePin(GPIO_CS1_GPIO_Port, GPIO_CS1_Pin, GPIO_PIN_RESET);
+    HAL_SPI_Receive_IT(&hspi1, tcSPIData, 4);
+  }
+}
 /* USER CODE END 4 */
 
 /**
