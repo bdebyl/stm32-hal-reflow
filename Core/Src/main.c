@@ -60,6 +60,7 @@ static void MX_GPIO_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_TIM14_Init(void);
+static void MX_NVIC_Init(void);
 /* USER CODE BEGIN PFP */
 static void MX_LCD_1_Init(void);
 /* USER CODE END PFP */
@@ -100,6 +101,9 @@ int main(void) {
   MX_SPI1_Init();
   MX_USART1_UART_Init();
   MX_TIM14_Init();
+
+  /* Initialize interrupts */
+  MX_NVIC_Init();
   /* USER CODE BEGIN 2 */
   MX_LCD_1_Init();
 
@@ -118,11 +122,13 @@ int main(void) {
   /* USER CODE BEGIN WHILE */
   while (1) {
     /* USER CODE END WHILE */
-    sprintf(lcdStr, fmtStr, temperature);
-    LCD_SetCursorPosition(&LCD, tempPos);
-    LCD_WriteString(&LCD, lcdStr, strlen(lcdStr));
-    HAL_Delay(500);
+
     /* USER CODE BEGIN 3 */
+    LCD_SetCursorPosition(&LCD, tempPos);
+    temperature = ((tcSPIData[0] & 0x7F) << 4) | ((tcSPIData[1] >> 4) & 0x0F);
+    sprintf(lcdStr, fmtStr, temperature);
+    LCD_WriteString(&LCD, lcdStr, strlen(lcdStr));
+    HAL_Delay(150);
   }
   /* USER CODE END 3 */
 }
@@ -167,6 +173,19 @@ void SystemClock_Config(void) {
 }
 
 /**
+ * @brief NVIC Configuration.
+ * @retval None
+ */
+static void MX_NVIC_Init(void) {
+  /* TIM14_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(TIM14_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(TIM14_IRQn);
+  /* SPI1_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(SPI1_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(SPI1_IRQn);
+}
+
+/**
  * @brief SPI1 Initialization Function
  * @param None
  * @retval None
@@ -188,7 +207,7 @@ static void MX_SPI1_Init(void) {
   hspi1.Init.CLKPolarity       = SPI_POLARITY_LOW;
   hspi1.Init.CLKPhase          = SPI_PHASE_1EDGE;
   hspi1.Init.NSS               = SPI_NSS_SOFT;
-  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_32;
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_64;
   hspi1.Init.FirstBit          = SPI_FIRSTBIT_MSB;
   hspi1.Init.TIMode            = SPI_TIMODE_DISABLE;
   hspi1.Init.CRCCalculation    = SPI_CRCCALCULATION_DISABLE;
@@ -199,7 +218,6 @@ static void MX_SPI1_Init(void) {
     Error_Handler();
   }
   /* USER CODE BEGIN SPI1_Init 2 */
-
   /* USER CODE END SPI1_Init 2 */
 }
 
@@ -218,9 +236,9 @@ static void MX_TIM14_Init(void) {
 
   /* USER CODE END TIM14_Init 1 */
   htim14.Instance               = TIM14;
-  htim14.Init.Prescaler         = 4801;
+  htim14.Init.Prescaler         = 4800 - 1;
   htim14.Init.CounterMode       = TIM_COUNTERMODE_UP;
-  htim14.Init.Period            = 999;
+  htim14.Init.Period            = 100 - 1;
   htim14.Init.ClockDivision     = TIM_CLOCKDIVISION_DIV1;
   htim14.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim14) != HAL_OK) {
@@ -349,6 +367,10 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
     HAL_GPIO_WritePin(GPIO_CS1_GPIO_Port, GPIO_CS1_Pin, GPIO_PIN_RESET);
     HAL_SPI_Receive_IT(&hspi1, tcSPIData, 4);
   }
+}
+
+void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef *hspi) {
+  HAL_GPIO_WritePin(GPIO_CS1_GPIO_Port, GPIO_CS1_Pin, GPIO_PIN_SET);
 }
 /* USER CODE END 4 */
 
