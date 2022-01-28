@@ -73,6 +73,7 @@ void Error_Handler(void);
 #define GPIO_LCD_RW_Pin GPIO_PIN_9
 #define GPIO_LCD_RW_GPIO_Port GPIOB
 /* USER CODE BEGIN Private defines */
+#define ARM_MATH_CM0
 #define GPIO_LCD_PORT (GPIOB)
 #define GPIO_LCD_WritePort(x)                                                  \
   (GPIO_LCD_PORT->ODR = (GPIO_LCD_PORT->ODR & 0xFF00) | x)
