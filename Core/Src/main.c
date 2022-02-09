@@ -52,7 +52,6 @@ TIM_HandleTypeDef  htim14;
 UART_HandleTypeDef huart1;
 
 /* USER CODE BEGIN PV */
-
 static uint8_t              tcSPIData[4]; // 32-bits
 static LCD_TypeDef          LCD       = {0};
 static arm_pid_instance_q15 reflowPid = {
@@ -90,6 +89,11 @@ static q15_t PID_Calculate(arm_pid_instance_q15 *s, int16_t setpoint,
   }
 
   return out;
+}
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
+  if (GPIO_Pin == GPIO_BTN_Pin) {
+    __HAL_TIM_SET_COUNTER(&htim3, 0);
+  }
 }
 /* USER CODE END 0 */
 
@@ -133,7 +137,7 @@ int main(void) {
   MX_PID_Init();
 
   const char *fmtStr = "%3dC";
-  const char *fmtPid = "%d  %d";
+  const char *fmtPid = "%d  %d  ";
   char        lcdStr[7 + 1];
   char        lcdPidStr[7 + 1 + 7 + 2];
   memset(lcdStr, ' ', 5);
@@ -169,9 +173,10 @@ int main(void) {
     // Print PID
     LCD_SetCursorPosition(&LCD, pidPos);
     pidOut = PID_Calculate(&reflowPid, setPoint, temperature);
-    sprintf(lcdPidStr, fmtPid, pidOut, __HAL_TIM_GET_COUNTER(&htim3));
+    sprintf(lcdPidStr, fmtPid, pidOut,
+            (uint16_t)(__HAL_TIM_GET_COUNTER(&htim3) >> 2));
     LCD_WriteString(&LCD, lcdPidStr, strlen(lcdPidStr));
-    HAL_Delay(450);
+    HAL_Delay(150);
   }
   /* USER CODE END 3 */
 }
@@ -226,6 +231,9 @@ static void MX_NVIC_Init(void) {
   /* SPI1_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(SPI1_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(SPI1_IRQn);
+  /* EXTI4_15_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(EXTI4_15_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI4_15_IRQn);
 }
 
 /**
@@ -284,18 +292,18 @@ static void MX_TIM3_Init(void) {
   htim3.Instance               = TIM3;
   htim3.Init.Prescaler         = 0;
   htim3.Init.CounterMode       = TIM_COUNTERMODE_UP;
-  htim3.Init.Period            = 4;
+  htim3.Init.Period            = 100;
   htim3.Init.ClockDivision     = TIM_CLOCKDIVISION_DIV1;
-  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  sConfig.EncoderMode          = TIM_ENCODERMODE_TI1;
-  sConfig.IC1Polarity          = TIM_ICPOLARITY_RISING;
+  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
+  sConfig.EncoderMode          = TIM_ENCODERMODE_TI12;
+  sConfig.IC1Polarity          = TIM_ICPOLARITY_FALLING;
   sConfig.IC1Selection         = TIM_ICSELECTION_DIRECTTI;
-  sConfig.IC1Prescaler         = TIM_ICPSC_DIV2;
-  sConfig.IC1Filter            = 0;
-  sConfig.IC2Polarity          = TIM_ICPOLARITY_RISING;
+  sConfig.IC1Prescaler         = TIM_ICPSC_DIV1;
+  sConfig.IC1Filter            = 10;
+  sConfig.IC2Polarity          = TIM_ICPOLARITY_FALLING;
   sConfig.IC2Selection         = TIM_ICSELECTION_DIRECTTI;
-  sConfig.IC2Prescaler         = TIM_ICPSC_DIV2;
-  sConfig.IC2Filter            = 0;
+  sConfig.IC2Prescaler         = TIM_ICPSC_DIV1;
+  sConfig.IC2Filter            = 10;
   if (HAL_TIM_Encoder_Init(&htim3, &sConfig) != HAL_OK) {
     Error_Handler();
   }
@@ -305,7 +313,7 @@ static void MX_TIM3_Init(void) {
     Error_Handler();
   }
   /* USER CODE BEGIN TIM3_Init 2 */
-  if (HAL_TIM_Encoder_Start_IT(&htim3, TIM_CHANNEL_ALL) != HAL_OK) {
+  if (HAL_TIM_Encoder_Start(&htim3, TIM_CHANNEL_ALL) != HAL_OK) {
     Error_Handler();
   }
   /* USER CODE END TIM3_Init 2 */
@@ -418,11 +426,11 @@ static void MX_GPIO_Init(void) {
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : PC8 */
-  GPIO_InitStruct.Pin  = GPIO_PIN_8;
+  /*Configure GPIO pin : GPIO_BTN_Pin */
+  GPIO_InitStruct.Pin  = GPIO_BTN_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+  HAL_GPIO_Init(GPIO_BTN_GPIO_Port, &GPIO_InitStruct);
 }
 
 /* USER CODE BEGIN 4 */
