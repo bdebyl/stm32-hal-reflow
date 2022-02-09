@@ -46,6 +46,7 @@
 /* Private variables ---------------------------------------------------------*/
 SPI_HandleTypeDef  hspi1;
 
+TIM_HandleTypeDef  htim3;
 TIM_HandleTypeDef  htim14;
 
 UART_HandleTypeDef huart1;
@@ -54,9 +55,8 @@ UART_HandleTypeDef huart1;
 
 static uint8_t              tcSPIData[4]; // 32-bits
 static LCD_TypeDef          LCD       = {0};
-static arm_pid_instance_q15 reflowPid = {.Ki = (q15_t)(1.0f * 8192),
-                                         .Kp = (q15_t)(1.2f * 8192),
-                                         .Kd = (q15_t)(0.5f * 8192)};
+static arm_pid_instance_q15 reflowPid = {
+    .Ki = (q15_t)(0), .Kp = (q15_t)(16000), .Kd = (q15_t)(0)};
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -65,6 +65,7 @@ static void MX_GPIO_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_TIM14_Init(void);
+static void MX_TIM3_Init(void);
 static void MX_NVIC_Init(void);
 /* USER CODE BEGIN PFP */
 static void MX_LCD_1_Init(void);
@@ -85,7 +86,7 @@ static q15_t PID_Calculate(arm_pid_instance_q15 *s, int16_t setpoint,
   } else if (out < PID_MIN) {
     out = PID_MIN;
   } else {
-    s->Ki = (q15_t)(1.0f * PID_SCALE);
+    s->Ki = (q15_t)(8000);
   }
 
   return out;
@@ -123,6 +124,7 @@ int main(void) {
   MX_SPI1_Init();
   MX_USART1_UART_Init();
   MX_TIM14_Init();
+  MX_TIM3_Init();
 
   /* Initialize interrupts */
   MX_NVIC_Init();
@@ -131,9 +133,9 @@ int main(void) {
   MX_PID_Init();
 
   const char *fmtStr = "%3dC";
-  const char *fmtPid = "%d  ";
+  const char *fmtPid = "%d  %d";
   char        lcdStr[7 + 1];
-  char        lcdPidStr[7 + 1 + 2];
+  char        lcdPidStr[7 + 1 + 7 + 2];
   memset(lcdStr, ' ', 5);
   int16_t             temperature = 0, setPoint = 100;
   q15_t               pidOut  = 0;
@@ -155,10 +157,7 @@ int main(void) {
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1) {
-    /* USER CODE END WH  USBD_CDC_SetRxBuffer(&hUsbDeviceFS, &Buf[0]);
-  USBD_CDC_ReceivePacket(&hUsbDeviceFS);
-  CDC_Transmit_FS(Buf,*Len);
-  return (USBD_OK);ILE */
+    /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
     // Print temperature
@@ -170,7 +169,7 @@ int main(void) {
     // Print PID
     LCD_SetCursorPosition(&LCD, pidPos);
     pidOut = PID_Calculate(&reflowPid, setPoint, temperature);
-    sprintf(lcdPidStr, fmtPid, pidOut);
+    sprintf(lcdPidStr, fmtPid, pidOut, __HAL_TIM_GET_COUNTER(&htim3));
     LCD_WriteString(&LCD, lcdPidStr, strlen(lcdPidStr));
     HAL_Delay(450);
   }
@@ -263,6 +262,53 @@ static void MX_SPI1_Init(void) {
   }
   /* USER CODE BEGIN SPI1_Init 2 */
   /* USER CODE END SPI1_Init 2 */
+}
+
+/**
+ * @brief TIM3 Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_TIM3_Init(void) {
+
+  /* USER CODE BEGIN TIM3_Init 0 */
+
+  /* USER CODE END TIM3_Init 0 */
+
+  TIM_Encoder_InitTypeDef sConfig       = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  /* USER CODE BEGIN TIM3_Init 1 */
+
+  /* USER CODE END TIM3_Init 1 */
+  htim3.Instance               = TIM3;
+  htim3.Init.Prescaler         = 0;
+  htim3.Init.CounterMode       = TIM_COUNTERMODE_UP;
+  htim3.Init.Period            = 4;
+  htim3.Init.ClockDivision     = TIM_CLOCKDIVISION_DIV1;
+  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  sConfig.EncoderMode          = TIM_ENCODERMODE_TI1;
+  sConfig.IC1Polarity          = TIM_ICPOLARITY_RISING;
+  sConfig.IC1Selection         = TIM_ICSELECTION_DIRECTTI;
+  sConfig.IC1Prescaler         = TIM_ICPSC_DIV2;
+  sConfig.IC1Filter            = 0;
+  sConfig.IC2Polarity          = TIM_ICPOLARITY_RISING;
+  sConfig.IC2Selection         = TIM_ICSELECTION_DIRECTTI;
+  sConfig.IC2Prescaler         = TIM_ICPSC_DIV2;
+  sConfig.IC2Filter            = 0;
+  if (HAL_TIM_Encoder_Init(&htim3, &sConfig) != HAL_OK) {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode     = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK) {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM3_Init 2 */
+  if (HAL_TIM_Encoder_Start_IT(&htim3, TIM_CHANNEL_ALL) != HAL_OK) {
+    Error_Handler();
+  }
+  /* USER CODE END TIM3_Init 2 */
 }
 
 /**
@@ -371,6 +417,12 @@ static void MX_GPIO_Init(void) {
   GPIO_InitStruct.Pull  = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : PC8 */
+  GPIO_InitStruct.Pin  = GPIO_PIN_8;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 }
 
 /* USER CODE BEGIN 4 */

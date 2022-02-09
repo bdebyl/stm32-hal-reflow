@@ -77,10 +77,9 @@ void Error_Handler(void);
 #define GPIO_LCD_PORT (GPIOB)
 #define GPIO_LCD_WritePort(x)                                                  \
   (GPIO_LCD_PORT->ODR = (GPIO_LCD_PORT->ODR & 0xFF00) | x)
-#define PID_SCALE (8192)
-#define PID_MAX   (120)
-#define PID_MIN   (0)
-#define PID_KT    (5)
+#define PID_MAX (120)
+#define PID_MIN (0)
+#define PID_KT  (5)
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus
