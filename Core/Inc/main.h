@@ -58,31 +58,37 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
-#define GPIO_CS0_Pin GPIO_PIN_4
-#define GPIO_CS0_GPIO_Port GPIOC
-#define GPIO_CS1_Pin GPIO_PIN_5
-#define GPIO_CS1_GPIO_Port GPIOC
-#define GPIO_LCD_RS_Pin GPIO_PIN_10
+#define GPIO_CS0_Pin          GPIO_PIN_4
+#define GPIO_CS0_GPIO_Port    GPIOC
+#define GPIO_CS1_Pin          GPIO_PIN_5
+#define GPIO_CS1_GPIO_Port    GPIOC
+#define GPIO_LCD_RS_Pin       GPIO_PIN_10
 #define GPIO_LCD_RS_GPIO_Port GPIOB
-#define GPIO_BTN_Pin GPIO_PIN_8
-#define GPIO_BTN_GPIO_Port GPIOC
-#define GPIO_BTN_EXTI_IRQn EXTI4_15_IRQn
-#define GPIO_R1E_Pin GPIO_PIN_10
-#define GPIO_R1E_GPIO_Port GPIOC
-#define GPIO_R2E_Pin GPIO_PIN_11
-#define GPIO_R2E_GPIO_Port GPIOC
-#define GPIO_LCD_E_Pin GPIO_PIN_8
-#define GPIO_LCD_E_GPIO_Port GPIOB
-#define GPIO_LCD_RW_Pin GPIO_PIN_9
+#define GPIO_BTN_Pin          GPIO_PIN_8
+#define GPIO_BTN_GPIO_Port    GPIOC
+#define GPIO_BTN_EXTI_IRQn    EXTI4_15_IRQn
+#define GPIO_ZX_EN_Pin        GPIO_PIN_9
+#define GPIO_ZX_EN_GPIO_Port  GPIOA
+#define GPIO_ZX_DET_Pin       GPIO_PIN_10
+#define GPIO_ZX_DET_GPIO_Port GPIOA
+#define GPIO_ZX_DET_EXTI_IRQn EXTI4_15_IRQn
+#define GPIO_R1E_Pin          GPIO_PIN_10
+#define GPIO_R1E_GPIO_Port    GPIOC
+#define GPIO_R2E_Pin          GPIO_PIN_11
+#define GPIO_R2E_GPIO_Port    GPIOC
+#define GPIO_LCD_E_Pin        GPIO_PIN_8
+#define GPIO_LCD_E_GPIO_Port  GPIOB
+#define GPIO_LCD_RW_Pin       GPIO_PIN_9
 #define GPIO_LCD_RW_GPIO_Port GPIOB
 /* USER CODE BEGIN Private defines */
 #define ARM_MATH_CM0
 #define GPIO_LCD_PORT (GPIOB)
 #define GPIO_LCD_WritePort(x)                                                  \
   (GPIO_LCD_PORT->ODR = (GPIO_LCD_PORT->ODR & 0xFF00) | x)
-#define PID_MAX (120)
-#define PID_MIN (0)
-#define PID_KT  (5)
+#define PID_MAX      (120)
+#define PID_MIN      (0)
+#define PID_KT       (5)
+#define ZX_COUNT_MAX (120)
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus

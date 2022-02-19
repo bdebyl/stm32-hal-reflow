@@ -44,25 +44,27 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-SPI_HandleTypeDef  hspi1;
+SPI_HandleTypeDef hspi1;
 
-TIM_HandleTypeDef  htim3;
-TIM_HandleTypeDef  htim14;
-
-UART_HandleTypeDef huart1;
+TIM_HandleTypeDef htim3;
+TIM_HandleTypeDef htim14;
 
 /* USER CODE BEGIN PV */
 static uint8_t              tcSPIData[4]; // 32-bits
 static LCD_TypeDef          LCD       = {0};
-static arm_pid_instance_q15 reflowPid = {
-    .Ki = (q15_t)(0), .Kp = (q15_t)(16000), .Kd = (q15_t)(0)};
+static arm_pid_instance_f32 reflowPid = {.Ki = 1.0f, .Kp = 50.0f, .Kd = 10.0f};
+// static uint8_t              TestState = 0x00;
+static uint16_t ZXCounter         = 0x00;
+static uint8_t  OvenControlEnable = 0x00;
+static uint16_t OvenTemperature   = 0x00;
+static uint16_t OvenPWM           = 0x00;
+static uint16_t SetPoint          = 230U;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void        SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_SPI1_Init(void);
-static void MX_USART1_UART_Init(void);
 static void MX_TIM14_Init(void);
 static void MX_TIM3_Init(void);
 static void MX_NVIC_Init(void);
@@ -73,11 +75,12 @@ static void MX_PID_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-static q15_t PID_Calculate(arm_pid_instance_q15 *s, int16_t setpoint,
-                           int16_t in) {
-  q15_t err = (q15_t)(setpoint - in);
+static uint16_t PID_Calculate(arm_pid_instance_f32 *s, float32_t setpoint,
+                              float32_t in) {
+  float32_t err = setpoint - in;
 
-  q15_t out = arm_pid_q15(s, err);
+  float32_t out = arm_pid_f32(s, err);
+  /*
   if (out > PID_MAX) {
     // Anti wind-up
     s->Ki = 0;
@@ -87,12 +90,89 @@ static q15_t PID_Calculate(arm_pid_instance_q15 *s, int16_t setpoint,
   } else {
     s->Ki = (q15_t)(8000);
   }
+  */
+  if (out <= 0.00f) {
+    out = 0.00f;
+  }
 
-  return out;
+  if (out >= 1024.0f) {
+    out = 1024.0f;
+  }
+
+  return (uint16_t)out;
 }
+/*
+static uint32_t Enc_GetValue(TIM_HandleTypeDef *htim) {
+  uint32_t count = (__HAL_TIM_GET_COUNTER(htim) >> 2);
+  if (count > 300)
+    count = 300;
+
+  return 300 - count;
+}
+*/
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
   if (GPIO_Pin == GPIO_BTN_Pin) {
-    __HAL_TIM_SET_COUNTER(&htim3, 0);
+    //__HAL_TIM_SET_COUNTER(&htim3, 0);
+    // TemperatureSetPoint = (float32_t)Enc_GetValue(&htim3);
+    /*
+    switch (TestState) {
+    case 0x00:
+      HAL_GPIO_WritePin(GPIO_R1E_GPIO_Port, GPIO_R1E_Pin, GPIO_PIN_RESET);
+      HAL_GPIO_WritePin(GPIO_R2E_GPIO_Port, GPIO_R2E_Pin, GPIO_PIN_RESET);
+      TestState = 0x01;
+      break;
+    case 0x01:
+      HAL_GPIO_WritePin(GPIO_R1E_GPIO_Port, GPIO_R1E_Pin, GPIO_PIN_RESET);
+      HAL_GPIO_WritePin(GPIO_R2E_GPIO_Port, GPIO_R2E_Pin, GPIO_PIN_SET);
+      TestState = 0x02;
+      break;
+    case 0x02:
+      HAL_GPIO_WritePin(GPIO_R1E_GPIO_Port, GPIO_R1E_Pin, GPIO_PIN_SET);
+      HAL_GPIO_WritePin(GPIO_R2E_GPIO_Port, GPIO_R2E_Pin, GPIO_PIN_RESET);
+      TestState = 0x03;
+      break;
+    case 0x03:
+      HAL_GPIO_WritePin(GPIO_R1E_GPIO_Port, GPIO_R1E_Pin, GPIO_PIN_SET);
+      HAL_GPIO_WritePin(GPIO_R2E_GPIO_Port, GPIO_R2E_Pin, GPIO_PIN_SET);
+      TestState = 0x00;
+      break;
+    default:
+      break;
+    }
+    */
+    if (OvenControlEnable) {
+      OvenControlEnable = 0x00;
+    } else {
+      OvenControlEnable = 0x01;
+    }
+  }
+
+  if (GPIO_Pin == GPIO_ZX_DET_Pin) {
+    OvenTemperature =
+        ((tcSPIData[0] & 0x7F) << 4) | ((tcSPIData[1] >> 4) & 0x0F);
+
+    if (OvenControlEnable) {
+      ZXCounter++;
+      if (ZXCounter < OvenPWM) {
+        HAL_GPIO_WritePin(GPIO_R1E_GPIO_Port, GPIO_R1E_Pin, GPIO_PIN_SET);
+        HAL_GPIO_WritePin(GPIO_R2E_GPIO_Port, GPIO_R2E_Pin, GPIO_PIN_SET);
+      } else {
+        HAL_GPIO_WritePin(GPIO_R1E_GPIO_Port, GPIO_R1E_Pin, GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(GPIO_R2E_GPIO_Port, GPIO_R2E_Pin, GPIO_PIN_RESET);
+      }
+
+      if (ZXCounter == ZX_COUNT_MAX) {
+
+        OvenPWM = PID_Calculate(&reflowPid, (float32_t)SetPoint,
+                                (float32_t)OvenTemperature);
+
+        // Re-set the Zero-cross counter
+        ZXCounter = 0;
+      }
+    } else {
+      HAL_GPIO_WritePin(GPIO_R1E_GPIO_Port, GPIO_R1E_Pin, GPIO_PIN_RESET);
+      HAL_GPIO_WritePin(GPIO_R2E_GPIO_Port, GPIO_R2E_Pin, GPIO_PIN_RESET);
+    }
   }
 }
 /* USER CODE END 0 */
@@ -126,7 +206,6 @@ int main(void) {
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_SPI1_Init();
-  MX_USART1_UART_Init();
   MX_TIM14_Init();
   MX_TIM3_Init();
 
@@ -141,8 +220,6 @@ int main(void) {
   char        lcdStr[7 + 1];
   char        lcdPidStr[7 + 1 + 7 + 2];
   memset(lcdStr, ' ', 5);
-  int16_t             temperature = 0, setPoint = 100;
-  q15_t               pidOut  = 0;
   char               *tempStr = "Temperature: ";
   char               *pidStr  = "PID: ";
 
@@ -166,17 +243,14 @@ int main(void) {
     /* USER CODE BEGIN 3 */
     // Print temperature
     LCD_SetCursorPosition(&LCD, tempPos);
-    temperature = ((tcSPIData[0] & 0x7F) << 4) | ((tcSPIData[1] >> 4) & 0x0F);
-    sprintf(lcdStr, fmtStr, temperature);
+    sprintf(lcdStr, fmtStr, OvenTemperature);
     LCD_WriteString(&LCD, lcdStr, strlen(lcdStr));
 
     // Print PID
     LCD_SetCursorPosition(&LCD, pidPos);
-    pidOut = PID_Calculate(&reflowPid, setPoint, temperature);
-    sprintf(lcdPidStr, fmtPid, pidOut,
-            (uint16_t)(__HAL_TIM_GET_COUNTER(&htim3) >> 2));
+    sprintf(lcdPidStr, fmtPid, OvenPWM, OvenControlEnable);
     LCD_WriteString(&LCD, lcdPidStr, strlen(lcdPidStr));
-    HAL_Delay(150);
+    HAL_Delay(200);
   }
   /* USER CODE END 3 */
 }
@@ -186,9 +260,8 @@ int main(void) {
  * @retval None
  */
 void SystemClock_Config(void) {
-  RCC_OscInitTypeDef       RCC_OscInitStruct = {0};
-  RCC_ClkInitTypeDef       RCC_ClkInitStruct = {0};
-  RCC_PeriphCLKInitTypeDef PeriphClkInit     = {0};
+  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
 
   /** Initializes the RCC Oscillators according to the specified parameters
    * in the RCC_OscInitTypeDef structure.
@@ -211,11 +284,6 @@ void SystemClock_Config(void) {
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
 
   if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_1) != HAL_OK) {
-    Error_Handler();
-  }
-  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_USART1;
-  PeriphClkInit.Usart1ClockSelection = RCC_USART1CLKSOURCE_PCLK1;
-  if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK) {
     Error_Handler();
   }
 }
@@ -292,7 +360,7 @@ static void MX_TIM3_Init(void) {
   htim3.Instance               = TIM3;
   htim3.Init.Prescaler         = 0;
   htim3.Init.CounterMode       = TIM_COUNTERMODE_UP;
-  htim3.Init.Period            = 100;
+  htim3.Init.Period            = 300 * 4 + 1;
   htim3.Init.ClockDivision     = TIM_CLOCKDIVISION_DIV1;
   htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
   sConfig.EncoderMode          = TIM_ENCODERMODE_TI12;
@@ -313,6 +381,7 @@ static void MX_TIM3_Init(void) {
     Error_Handler();
   }
   /* USER CODE BEGIN TIM3_Init 2 */
+  __HAL_TIM_SET_COUNTER(&htim3, htim3.Init.Period - 1);
   if (HAL_TIM_Encoder_Start(&htim3, TIM_CHANNEL_ALL) != HAL_OK) {
     Error_Handler();
   }
@@ -351,37 +420,6 @@ static void MX_TIM14_Init(void) {
 }
 
 /**
- * @brief USART1 Initialization Function
- * @param None
- * @retval None
- */
-static void MX_USART1_UART_Init(void) {
-
-  /* USER CODE BEGIN USART1_Init 0 */
-
-  /* USER CODE END USART1_Init 0 */
-
-  /* USER CODE BEGIN USART1_Init 1 */
-
-  /* USER CODE END USART1_Init 1 */
-  huart1.Instance                    = USART1;
-  huart1.Init.BaudRate               = 115200;
-  huart1.Init.WordLength             = UART_WORDLENGTH_8B;
-  huart1.Init.StopBits               = UART_STOPBITS_1;
-  huart1.Init.Parity                 = UART_PARITY_NONE;
-  huart1.Init.Mode                   = UART_MODE_TX_RX;
-  huart1.Init.HwFlowCtl              = UART_HWCONTROL_NONE;
-  huart1.Init.OverSampling           = UART_OVERSAMPLING_16;
-  huart1.Init.OneBitSampling         = UART_ONE_BIT_SAMPLE_DISABLE;
-  huart1.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
-  if (HAL_UART_Init(&huart1) != HAL_OK) {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN USART1_Init 2 */
-  /* USER CODE END USART1_Init 2 */
-}
-
-/**
  * @brief GPIO Initialization Function
  * @param None
  * @retval None
@@ -407,6 +445,9 @@ static void MX_GPIO_Init(void) {
                         GPIO_PIN_7 | GPIO_LCD_E_Pin | GPIO_LCD_RW_Pin,
                     GPIO_PIN_RESET);
 
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIO_ZX_EN_GPIO_Port, GPIO_ZX_EN_Pin, GPIO_PIN_SET);
+
   /*Configure GPIO pins : GPIO_CS0_Pin GPIO_CS1_Pin GPIO_R1E_Pin GPIO_R2E_Pin */
   GPIO_InitStruct.Pin =
       GPIO_CS0_Pin | GPIO_CS1_Pin | GPIO_R1E_Pin | GPIO_R2E_Pin;
@@ -431,6 +472,19 @@ static void MX_GPIO_Init(void) {
   GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIO_BTN_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : GPIO_ZX_EN_Pin */
+  GPIO_InitStruct.Pin   = GPIO_ZX_EN_Pin;
+  GPIO_InitStruct.Mode  = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull  = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIO_ZX_EN_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : GPIO_ZX_DET_Pin */
+  GPIO_InitStruct.Pin  = GPIO_ZX_DET_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIO_ZX_DET_GPIO_Port, &GPIO_InitStruct);
 }
 
 /* USER CODE BEGIN 4 */
@@ -468,7 +522,7 @@ static void MX_LCD_1_Init(void) {
 
 static void MX_PID_Init(void) {
   // PID
-  arm_pid_init_q15(&reflowPid, 1);
+  arm_pid_init_f32(&reflowPid, 1);
 }
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
