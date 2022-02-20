@@ -22,8 +22,8 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "arm_math.h"
 #include "lcd.h"
+#include "pid.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -50,15 +50,22 @@ TIM_HandleTypeDef htim3;
 TIM_HandleTypeDef htim14;
 
 /* USER CODE BEGIN PV */
-static uint8_t              tcSPIData[4]; // 32-bits
-static LCD_TypeDef          LCD       = {0};
-static arm_pid_instance_f32 reflowPid = {.Ki = 1.0f, .Kp = 50.0f, .Kd = 10.0f};
+static uint8_t     tcSPIData[4]; // 32-bits
+static LCD_TypeDef LCD       = {0};
+static PID         reflowPid = {.Kp       = 3.8f,
+                                .Ki       = 0.6f,
+                                .Kd       = 0.1f,
+                                .T        = (float)PID_T,
+                                .tau      = 0.1f,
+                                .LimitMax = (float)PID_MAX,
+                                .LimitMin = (float)PID_MIN};
+
 // static uint8_t              TestState = 0x00;
 static uint16_t ZXCounter         = 0x00;
 static uint8_t  OvenControlEnable = 0x00;
-static uint16_t OvenTemperature   = 0x00;
-static uint16_t OvenPWM           = 0x00;
-static uint16_t SetPoint          = 230U;
+static int16_t  OvenTemperature   = 0x00;
+static int16_t  OvenPWM           = 0x00;
+static int16_t  SetPoint          = 80;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -75,32 +82,6 @@ static void MX_PID_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-static uint16_t PID_Calculate(arm_pid_instance_f32 *s, float32_t setpoint,
-                              float32_t in) {
-  float32_t err = setpoint - in;
-
-  float32_t out = arm_pid_f32(s, err);
-  /*
-  if (out > PID_MAX) {
-    // Anti wind-up
-    s->Ki = 0;
-    out   = PID_MAX;
-  } else if (out < PID_MIN) {
-    out = PID_MIN;
-  } else {
-    s->Ki = (q15_t)(8000);
-  }
-  */
-  if (out <= 0.00f) {
-    out = 0.00f;
-  }
-
-  if (out >= 1024.0f) {
-    out = 1024.0f;
-  }
-
-  return (uint16_t)out;
-}
 /*
 static uint32_t Enc_GetValue(TIM_HandleTypeDef *htim) {
   uint32_t count = (__HAL_TIM_GET_COUNTER(htim) >> 2);
@@ -151,8 +132,15 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
     OvenTemperature =
         ((tcSPIData[0] & 0x7F) << 4) | ((tcSPIData[1] >> 4) & 0x0F);
 
+    ZXCounter++;
+    if (ZXCounter == ZX_COUNT_MAX) {
+
+      OvenPWM = PID_Update(&reflowPid, SetPoint, OvenTemperature);
+
+      // Re-set the Zero-cross counter
+      ZXCounter = 0;
+    }
     if (OvenControlEnable) {
-      ZXCounter++;
       if (ZXCounter < OvenPWM) {
         HAL_GPIO_WritePin(GPIO_R1E_GPIO_Port, GPIO_R1E_Pin, GPIO_PIN_SET);
         HAL_GPIO_WritePin(GPIO_R2E_GPIO_Port, GPIO_R2E_Pin, GPIO_PIN_SET);
@@ -161,14 +149,6 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
         HAL_GPIO_WritePin(GPIO_R2E_GPIO_Port, GPIO_R2E_Pin, GPIO_PIN_RESET);
       }
 
-      if (ZXCounter == ZX_COUNT_MAX) {
-
-        OvenPWM = PID_Calculate(&reflowPid, (float32_t)SetPoint,
-                                (float32_t)OvenTemperature);
-
-        // Re-set the Zero-cross counter
-        ZXCounter = 0;
-      }
     } else {
       HAL_GPIO_WritePin(GPIO_R1E_GPIO_Port, GPIO_R1E_Pin, GPIO_PIN_RESET);
       HAL_GPIO_WritePin(GPIO_R2E_GPIO_Port, GPIO_R2E_Pin, GPIO_PIN_RESET);
@@ -520,12 +500,9 @@ static void MX_LCD_1_Init(void) {
   LCD_Init(&LCD, &LCD_InitStruct);
 }
 
-static void MX_PID_Init(void) {
-  // PID
-  arm_pid_init_f32(&reflowPid, 1);
-}
+static void MX_PID_Init(void) { PID_Init(&reflowPid); }
 
-void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
+void        HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
   if (htim->Instance == TIM14) {
     HAL_GPIO_WritePin(GPIO_CS1_GPIO_Port, GPIO_CS1_Pin, GPIO_PIN_RESET);
     HAL_SPI_Receive_IT(&hspi1, tcSPIData, 4);

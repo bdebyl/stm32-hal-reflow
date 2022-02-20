@@ -85,10 +85,10 @@ void Error_Handler(void);
 #define GPIO_LCD_PORT (GPIOB)
 #define GPIO_LCD_WritePort(x)                                                  \
   (GPIO_LCD_PORT->ODR = (GPIO_LCD_PORT->ODR & 0xFF00) | x)
-#define PID_MAX      (120)
-#define PID_MIN      (0)
-#define PID_KT       (5)
 #define ZX_COUNT_MAX (120)
+#define PID_MAX      (ZX_COUNT_MAX)
+#define PID_MIN      (0)
+#define PID_T        (PID_MAX * (1 / 60))
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus
