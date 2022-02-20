@@ -51,7 +51,7 @@ int16_t PID_Update(PID *pid, int16_t setpoint, int16_t measurement) {
   }
 
   /* D */
-  pid->D = (2.0f * pid->Kd * ((float)measurement - pid->PrevMeasure)) +
+  pid->D = -(2.0f * pid->Kd * ((float)measurement - pid->PrevMeasure)) +
            ((2.0f * pid->tau - pid->T) * pid->D) / (2.0f * pid->tau + pid->T);
 
   // Output and limit

@@ -52,11 +52,11 @@ TIM_HandleTypeDef htim14;
 /* USER CODE BEGIN PV */
 static uint8_t     tcSPIData[4]; // 32-bits
 static LCD_TypeDef LCD       = {0};
-static PID         reflowPid = {.Kp       = 3.8f,
-                                .Ki       = 0.6f,
-                                .Kd       = 0.1f,
+static PID         reflowPid = {.Kp       = 40.0f,
+                                .Ki       = 0.5f,
+                                .Kd       = 0.2f,
                                 .T        = (float)PID_T,
-                                .tau      = 0.1f,
+                                .tau      = 0.2f,
                                 .LimitMax = (float)PID_MAX,
                                 .LimitMin = (float)PID_MIN};
 
@@ -65,7 +65,7 @@ static uint16_t ZXCounter         = 0x00;
 static uint8_t  OvenControlEnable = 0x00;
 static int16_t  OvenTemperature   = 0x00;
 static int16_t  OvenPWM           = 0x00;
-static int16_t  SetPoint          = 80;
+static int16_t  SetPoint          = 50;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
