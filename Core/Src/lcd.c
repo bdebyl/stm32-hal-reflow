@@ -281,3 +281,11 @@ HAL_StatusTypeDef LCD_WriteString(LCD_TypeDef *LCD, char *String,
 
   return status;
 }
+
+void LCD_ClearScreen(LCD_TypeDef *LCD) {
+  LCD_SetReadWrite(LCD, LCD_WRMODE_WRITE);
+  LCD_SetRegisterSelect(LCD, LCD_RSMODE_INST);
+
+  // Clear the screen
+  LCD_WritePort(LCD, LCD_INST_CLR);
+}

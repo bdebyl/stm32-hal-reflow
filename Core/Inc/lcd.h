@@ -96,5 +96,6 @@ HAL_StatusTypeDef LCD_GoToNextRow(LCD_TypeDef *LCD, uint8_t Column);
 void              LCD_SetEnable(LCD_TypeDef *LCD, GPIO_PinState Enable);
 void              LCD_SetReadWrite(LCD_TypeDef *LCD, GPIO_PinState RWMode);
 void              LCD_SetRegisterSelect(LCD_TypeDef *LCD, GPIO_PinState RSMode);
+void              LCD_ClearScreen(LCD_TypeDef *LCD);
 
 #endif // __LCD_H
