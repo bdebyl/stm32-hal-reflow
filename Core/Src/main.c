@@ -54,7 +54,7 @@ TIM_HandleTypeDef htim17;
 static uint8_t     tcSPIData[4]; // 32-bits
 static LCD_TypeDef LCD       = {0};
 static PID         reflowPid = {.Kp       = 40.0f,
-                                .Ki       = 0.5f,
+                                .Ki       = 1.6f,
                                 .Kd       = 0.2f,
                                 .T        = (float)PID_T,
                                 .tau      = 0.2f,
@@ -73,11 +73,13 @@ static uint8_t  ReflowTime        = 0;
 static uint8_t  ReflowIndex       = 0;
 
 // http://www.chipquik.com/datasheets/NC191SNL50.pdf
-static ReflowProfile_TypeDef ReflowProfile[4] = {
+static ReflowProfile_TypeDef ReflowProfile[5] = {
     {.SecondsToTarget = 90, .StartTemperature = 25, .TargetTemperature = 150},
     {.SecondsToTarget = 90, .StartTemperature = 150, .TargetTemperature = 175},
     {.SecondsToTarget = 30, .StartTemperature = 175, .TargetTemperature = 217},
-    {.SecondsToTarget = 30, .StartTemperature = 217, .TargetTemperature = 249}};
+    {.SecondsToTarget = 30, .StartTemperature = 217, .TargetTemperature = 249},
+    {.SecondsToTarget = 5, .StartTemperature = 249, .TargetTemperature = 249}};
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -108,9 +110,9 @@ static int16_t CalculateLinearSetPoint(int16_t beginTemp, int16_t endTemp,
                                        int16_t totalSeconds,
                                        uint8_t currentSecond) {
   // Calculate the time factor of ( (x1-x0)^2 )/ 2
-  int16_t timeFactor = (totalSeconds * totalSeconds) / 2;
+  float timeFactor = (totalSeconds * totalSeconds) / 2;
   // Calculate the temperature factor of ((x1-x0)*(y1-y0))/2
-  int16_t tempFactor = (totalSeconds * (endTemp - beginTemp)) / 2;
+  float tempFactor = (totalSeconds * (endTemp - beginTemp)) / 2;
   // Calculate the scale (m)
   float scale = tempFactor / timeFactor;
 
@@ -318,11 +320,14 @@ static void MX_NVIC_Init(void) {
   HAL_NVIC_SetPriority(TIM14_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(TIM14_IRQn);
   /* SPI1_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(SPI1_IRQn, 0, 0);
+  HAL_NVIC_SetPriority(SPI1_IRQn, 1, 0);
   HAL_NVIC_EnableIRQ(SPI1_IRQn);
   /* EXTI4_15_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(EXTI4_15_IRQn, 0, 0);
+  HAL_NVIC_SetPriority(EXTI4_15_IRQn, 3, 0);
   HAL_NVIC_EnableIRQ(EXTI4_15_IRQn);
+  /* TIM17_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(TIM17_IRQn, 2, 0);
+  HAL_NVIC_EnableIRQ(TIM17_IRQn);
 }
 
 /**
@@ -584,7 +589,7 @@ void        HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
       // Update PID setpoint
       SetPoint = CalculateLinearSetPoint(
                  currentProfile.StartTemperature, currentProfile.TargetTemperature,
-                 currentProfile.TargetTemperature, ReflowTime);
+                 currentProfile.SecondsToTarget, ReflowTime);
 
       ReflowTime++;
       if (ReflowTime > currentProfile.SecondsToTarget) {
@@ -592,7 +597,8 @@ void        HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
         ReflowIndex++;
         ReflowTime = 0;
 
-        if (ReflowIndex > (sizeof(ReflowProfile) / sizeof(ReflowProfile[0]))) {
+        if (ReflowIndex >
+            (sizeof(ReflowProfile) / sizeof(ReflowProfile[0])) - 1) {
           // Stop the  reflow
           DoReflow          = 0;
           OvenControlEnable = 0;
