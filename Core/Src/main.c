@@ -48,6 +48,7 @@ SPI_HandleTypeDef hspi1;
 
 TIM_HandleTypeDef htim3;
 TIM_HandleTypeDef htim14;
+TIM_HandleTypeDef htim17;
 
 /* USER CODE BEGIN PV */
 static uint8_t     tcSPIData[4]; // 32-bits
@@ -65,7 +66,18 @@ static uint16_t ZXCounter         = 0x00;
 static uint8_t  OvenControlEnable = 0x00;
 static int16_t  OvenTemperature   = 0x00;
 static int16_t  OvenPWM           = 0x00;
-static int16_t  SetPoint          = 50;
+static int16_t  SetPoint          = 20;
+
+static uint8_t  DoReflow          = 0;
+static uint8_t  ReflowTime        = 0;
+static uint8_t  ReflowIndex       = 0;
+
+// http://www.chipquik.com/datasheets/NC191SNL50.pdf
+static ReflowProfile_TypeDef ReflowProfile[4] = {
+    {.SecondsToTarget = 90, .StartTemperature = 25, .TargetTemperature = 150},
+    {.SecondsToTarget = 90, .StartTemperature = 150, .TargetTemperature = 175},
+    {.SecondsToTarget = 30, .StartTemperature = 175, .TargetTemperature = 217},
+    {.SecondsToTarget = 30, .StartTemperature = 217, .TargetTemperature = 249}};
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -74,6 +86,7 @@ static void MX_GPIO_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_TIM14_Init(void);
 static void MX_TIM3_Init(void);
+static void MX_TIM17_Init(void);
 static void MX_NVIC_Init(void);
 /* USER CODE BEGIN PFP */
 static void MX_LCD_1_Init(void);
@@ -91,6 +104,21 @@ static uint32_t Enc_GetValue(TIM_HandleTypeDef *htim) {
   return 300 - count;
 }
 */
+static int16_t CalculateLinearSetPoint(int16_t beginTemp, int16_t endTemp,
+                                       int16_t totalSeconds,
+                                       uint8_t currentSecond) {
+  // Calculate the time factor of ( (x1-x0)^2 )/ 2
+  int16_t timeFactor = (totalSeconds * totalSeconds) / 2;
+  // Calculate the temperature factor of ((x1-x0)*(y1-y0))/2
+  int16_t tempFactor = (totalSeconds * (endTemp - beginTemp)) / 2;
+  // Calculate the scale (m)
+  float scale = tempFactor / timeFactor;
+
+  // New set point w/ linear regression scale (y = mx + b)
+  float newSetPoint = scale * currentSecond + beginTemp;
+
+  return (int16_t)newSetPoint;
+}
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
   if (GPIO_Pin == GPIO_BTN_Pin) {
     //__HAL_TIM_SET_COUNTER(&htim3, 0);
@@ -121,17 +149,28 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
       break;
     }
     */
-    if (OvenControlEnable) {
-      OvenControlEnable = 0x00;
-    } else {
-      OvenControlEnable = 0x01;
+    /* Toggle
+     if (OvenControlEnable) {
+       OvenControlEnable = 0x00;
+     } else {
+       OvenControlEnable = 0x01;
+     }
+     */
+    if (DoReflow == 0) {
+      // Start the reflow
+      DoReflow          = 1;
+      OvenControlEnable = 1;
+      HAL_TIM_Base_Start_IT(&htim17);
     }
   }
 
+  // Update GPIO PID from zero-cross detection
   if (GPIO_Pin == GPIO_ZX_DET_Pin) {
+    // Get latest thermocouple temperature
     OvenTemperature =
         ((tcSPIData[0] & 0x7F) << 4) | ((tcSPIData[1] >> 4) & 0x0F);
 
+    // Increment zero-cross counter
     ZXCounter++;
     if (ZXCounter == ZX_COUNT_MAX) {
 
@@ -188,6 +227,7 @@ int main(void) {
   MX_SPI1_Init();
   MX_TIM14_Init();
   MX_TIM3_Init();
+  MX_TIM17_Init();
 
   /* Initialize interrupts */
   MX_NVIC_Init();
@@ -255,6 +295,7 @@ void SystemClock_Config(void) {
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK) {
     Error_Handler();
   }
+
   /** Initializes the CPU, AHB and APB buses clocks
    */
   RCC_ClkInitStruct.ClockType =
@@ -400,6 +441,35 @@ static void MX_TIM14_Init(void) {
 }
 
 /**
+ * @brief TIM17 Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_TIM17_Init(void) {
+
+  /* USER CODE BEGIN TIM17_Init 0 */
+
+  /* USER CODE END TIM17_Init 0 */
+
+  /* USER CODE BEGIN TIM17_Init 1 */
+
+  /* USER CODE END TIM17_Init 1 */
+  htim17.Instance               = TIM17;
+  htim17.Init.Prescaler         = 999;
+  htim17.Init.CounterMode       = TIM_COUNTERMODE_UP;
+  htim17.Init.Period            = 47999;
+  htim17.Init.ClockDivision     = TIM_CLOCKDIVISION_DIV1;
+  htim17.Init.RepetitionCounter = 0;
+  htim17.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim17) != HAL_OK) {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM17_Init 2 */
+
+  /* USER CODE END TIM17_Init 2 */
+}
+
+/**
  * @brief GPIO Initialization Function
  * @param None
  * @retval None
@@ -506,6 +576,33 @@ void        HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
   if (htim->Instance == TIM14) {
     HAL_GPIO_WritePin(GPIO_CS1_GPIO_Port, GPIO_CS1_Pin, GPIO_PIN_RESET);
     HAL_SPI_Receive_IT(&hspi1, tcSPIData, 4);
+  } else if (htim->Instance == TIM17) {
+    if (DoReflow) {
+      // Follow the reflow profile
+      ReflowProfile_TypeDef currentProfile = ReflowProfile[ReflowIndex];
+
+      // Update PID setpoint
+      SetPoint = CalculateLinearSetPoint(
+                 currentProfile.StartTemperature, currentProfile.TargetTemperature,
+                 currentProfile.TargetTemperature, ReflowTime);
+
+      ReflowTime++;
+      if (ReflowTime > currentProfile.SecondsToTarget) {
+        // Switch to next profile and reset timer
+        ReflowIndex++;
+        ReflowTime = 0;
+
+        if (ReflowIndex > (sizeof(ReflowProfile) / sizeof(ReflowProfile[0]))) {
+          // Stop the  reflow
+          DoReflow          = 0;
+          OvenControlEnable = 0;
+          ReflowIndex       = 0;
+
+          SetPoint          = 20;
+          HAL_TIM_Base_Stop_IT(&htim17);
+        }
+      }
+    }
   }
 }
 
@@ -543,5 +640,3 @@ void assert_failed(uint8_t *file, uint32_t line) {
   /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */
-
-/************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/

@@ -58,6 +58,7 @@
 /* External variables --------------------------------------------------------*/
 extern SPI_HandleTypeDef hspi1;
 extern TIM_HandleTypeDef htim14;
+extern TIM_HandleTypeDef htim17;
 /* USER CODE BEGIN EV */
 
 /* USER CODE END EV */
@@ -150,8 +151,8 @@ void EXTI4_15_IRQHandler(void)
   /* USER CODE BEGIN EXTI4_15_IRQn 0 */
 
   /* USER CODE END EXTI4_15_IRQn 0 */
-  HAL_GPIO_EXTI_IRQHandler(GPIO_PIN_8);
-  HAL_GPIO_EXTI_IRQHandler(GPIO_PIN_10);
+  HAL_GPIO_EXTI_IRQHandler(GPIO_BTN_Pin);
+  HAL_GPIO_EXTI_IRQHandler(GPIO_ZX_DET_Pin);
   /* USER CODE BEGIN EXTI4_15_IRQn 1 */
 
   /* USER CODE END EXTI4_15_IRQn 1 */
@@ -172,6 +173,20 @@ void TIM14_IRQHandler(void)
 }
 
 /**
+  * @brief This function handles TIM17 global interrupt.
+  */
+void TIM17_IRQHandler(void)
+{
+  /* USER CODE BEGIN TIM17_IRQn 0 */
+
+  /* USER CODE END TIM17_IRQn 0 */
+  HAL_TIM_IRQHandler(&htim17);
+  /* USER CODE BEGIN TIM17_IRQn 1 */
+
+  /* USER CODE END TIM17_IRQn 1 */
+}
+
+/**
   * @brief This function handles SPI1 global interrupt.
   */
 void SPI1_IRQHandler(void)
@@ -188,4 +203,3 @@ void SPI1_IRQHandler(void)
 /* USER CODE BEGIN 1 */
 
 /* USER CODE END 1 */
-/************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/

@@ -37,7 +37,11 @@ extern "C" {
 
 /* Exported types ------------------------------------------------------------*/
 /* USER CODE BEGIN ET */
-
+typedef struct {
+  int16_t StartTemperature;
+  int16_t TargetTemperature;
+  uint8_t SecondsToTarget;
+} ReflowProfile_TypeDef;
 /* USER CODE END ET */
 
 /* Exported constants --------------------------------------------------------*/
@@ -96,5 +100,3 @@ void Error_Handler(void);
 #endif
 
 #endif /* __MAIN_H */
-
-/************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/

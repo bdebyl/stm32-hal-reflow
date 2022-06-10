@@ -38,7 +38,6 @@ BUILD_DIR = build
 C_SOURCES =  \
 Core/Src/main.c \
 Core/Src/lcd.c \
-Core/Src/menu.c \
 Core/Src/pid.c \
 Core/Src/stm32f0xx_it.c \
 Core/Src/stm32f0xx_hal_msp.c \
