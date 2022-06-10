@@ -78,7 +78,7 @@ static ReflowProfile_TypeDef ReflowProfile[5] = {
     {.SecondsToTarget = 90, .StartTemperature = 150, .TargetTemperature = 175},
     {.SecondsToTarget = 30, .StartTemperature = 175, .TargetTemperature = 217},
     {.SecondsToTarget = 30, .StartTemperature = 217, .TargetTemperature = 249},
-    {.SecondsToTarget = 5, .StartTemperature = 249, .TargetTemperature = 249}};
+    {.SecondsToTarget = 10, .StartTemperature = 249, .TargetTemperature = 249}};
 
 /* USER CODE END PV */
 
