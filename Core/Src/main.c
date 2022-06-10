@@ -241,7 +241,7 @@ int main(void) {
   char        lcdPidStr[7 + 1 + 7 + 2];
   memset(lcdStr, ' ', 5);
   char               *tempStr = "Temperature: ";
-  char               *pidStr  = "PID: ";
+  char               *pidStr  = "Set: ";
 
   LCD_PositionTypeDef tempPos = {.Column = strlen(tempStr), .Row = LCD_ROW_1};
   LCD_PositionTypeDef pidPos  = {.Column = 0, .Row = LCD_ROW_2};
@@ -268,7 +268,7 @@ int main(void) {
 
     // Print PID
     LCD_SetCursorPosition(&LCD, pidPos);
-    sprintf(lcdPidStr, fmtPid, OvenPWM, OvenControlEnable);
+    sprintf(lcdPidStr, fmtPid, SetPoint, OvenControlEnable);
     LCD_WriteString(&LCD, lcdPidStr, strlen(lcdPidStr));
     HAL_Delay(200);
   }
