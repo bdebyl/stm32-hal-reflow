@@ -61,10 +61,21 @@ This is an STM32F051R4T6-based toaster oven controller for PCB reflow soldering.
   - Cursor positioning and string writing
   - Character and instruction mode switching
 
-#### Menu System (`menu.c/h`)
-- **Status**: Partially implemented
-- **Current**: Only reset/copyright display
-- **Future**: Navigation for profile selection and manual temperature control
+#### Enhanced Menu System (`menu.c/h`)
+- **Architecture**: State-based display management system
+- **States**:
+  - `MENU_RESET`: Startup/copyright display
+  - `MENU_MAIN`: Main operating display (temperature + status)
+  - `MENU_SETTEMP`: Future temperature setting menu
+- **Features**:
+  - Automatic display refresh timing (200ms intervals)
+  - Centralized LCD content management
+  - Startup sequence with copyright display before main operation
+  - Modular display functions for temperature and status updates
+- **Benefits**:
+  - Separates display logic from main control loop
+  - Easier to extend with additional menu screens
+  - Clean initialization sequence with startup message
 
 ### Temperature Control System
 
@@ -137,23 +148,36 @@ The LCD shows:
 - **Target**: `stm32-hal-reflow`
 - **Toolchain**: ARM GCC
 - **HAL Library**: STM32F0xx HAL Driver
+- **Optimization**: 
+  - Release build: `DEBUG=0`, `-Os` (size optimization)
+  - Flash usage: 15,520 bytes (94.7% of 16KB STM32F051R4T6 flash)
+  - Available space: 864 bytes remaining
+
+## Recent Improvements
+
+### ✅ Completed Enhancements
+1. **EXTI Timing Fix**: Resolved spurious reflow triggers during startup with 500ms settling delay
+2. **Advanced Reflow Profile System**: Implemented ramp and hold phases with temperature-based progression  
+3. **Enhanced Menu System**: State-based display management with startup sequence
+4. **Build Optimization**: Size-optimized build fits in 16KB flash with 864 bytes remaining
 
 ## Future Enhancements
 
 Based on the code structure, planned improvements include:
 
 1. **Menu Navigation System**:
-   - Profile selection via rotary encoder
+   - Profile selection via rotary encoder (TIM3 hardware ready)
    - Manual temperature control mode
    - Parameter tuning interface
 
-2. **PID Tuning**:
-   - Current parameters may need optimization
+2. **PID Optimization**:
+   - Convert floating-point to integer math for better performance
    - Adaptive tuning based on oven characteristics
+   - Parameter adjustment via menu system
 
 3. **Enhanced Display**:
    - Real-time temperature graphing
-   - Profile progress indication
+   - Profile progress indication with time remaining
    - Error/status messages
 
 4. **Safety Features**:

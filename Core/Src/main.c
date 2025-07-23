@@ -24,6 +24,7 @@
 /* USER CODE BEGIN Includes */
 #include "lcd.h"
 #include "pid.h"
+#include "menu.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -53,6 +54,7 @@ TIM_HandleTypeDef htim17;
 /* USER CODE BEGIN PV */
 static uint8_t     tcSPIData[4]; // 32-bits
 static LCD_TypeDef LCD       = {0};
+static Menu_TypeDef Menu     = {0};
 static PID         reflowPid = {.Kp       = 40.0f,
                                 .Ki       = 1.6f,
                                 .Kd       = 0.2f,
@@ -254,6 +256,12 @@ int main(void) {
   MX_LCD_1_Init();
   MX_PID_Init();
   
+  /* Initialize menu system */
+  Menu_Init(&Menu, &LCD);
+  
+  /* Display startup message */
+  Menu_HandleState(&Menu);
+  
   /* Allow hardware to settle before enabling EXTI interrupts */
   HAL_Delay(500);
   
@@ -263,25 +271,9 @@ int main(void) {
   
   /* Enable EXTI interrupts after settling delay */
   HAL_NVIC_EnableIRQ(EXTI4_15_IRQn);
-
-  const char *fmtStr = "%3dC";
-  const char *fmtPid = "%d %c%d ";
-  char        lcdStr[7 + 1];
-  char        lcdPidStr[16];
-  memset(lcdStr, ' ', 5);
-  char               *tempStr = "Temperature: ";
-  char               *pidStr  = "Set: ";
-
-  LCD_PositionTypeDef tempPos = {.Column = strlen(tempStr), .Row = LCD_ROW_1};
-  LCD_PositionTypeDef pidPos  = {.Column = 0, .Row = LCD_ROW_2};
-  if (LCD_WriteString(&LCD, tempStr, strlen(tempStr)) != HAL_OK) {
-    Error_Handler();
-  }
-  LCD_SetCursorPosition(&LCD, pidPos);
-  if (LCD_WriteString(&LCD, pidStr, strlen(pidStr)) != HAL_OK) {
-    Error_Handler();
-  }
-  pidPos.Column = strlen(pidStr);
+  
+  /* Switch to main operating display */
+  Menu_SetState(&Menu, MENU_MAIN);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -290,13 +282,13 @@ int main(void) {
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    // Print temperature
-    LCD_SetCursorPosition(&LCD, tempPos);
-    sprintf(lcdStr, fmtStr, OvenTemperature);
-    LCD_WriteString(&LCD, lcdStr, strlen(lcdStr));
+    // Update menu display system
+    Menu_Update(&Menu);
+    
+    // Update temperature display
+    Menu_DisplayTemperature(&Menu, OvenTemperature);
 
-    // Print PID and reflow state
-    LCD_SetCursorPosition(&LCD, pidPos);
+    // Update status display
     char stateChar = 'I';  // Idle
     if (DoReflow) {
       if (ReflowState == REFLOW_STATE_RAMPING) {
@@ -305,8 +297,8 @@ int main(void) {
         stateChar = 'H';  // Holding
       }
     }
-    sprintf(lcdPidStr, fmtPid, SetPoint, stateChar, ReflowIndex);
-    LCD_WriteString(&LCD, lcdPidStr, strlen(lcdPidStr));
+    Menu_DisplayStatus(&Menu, SetPoint, stateChar, ReflowIndex);
+    
     HAL_Delay(200);
   }
   /* USER CODE END 3 */
