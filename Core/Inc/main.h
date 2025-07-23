@@ -37,11 +37,24 @@ extern "C" {
 
 /* Exported types ------------------------------------------------------------*/
 /* USER CODE BEGIN ET */
+typedef enum {
+  REFLOW_PHASE_RAMP = 0,  // Linear temperature ramp over time
+  REFLOW_PHASE_HOLD       // Hold target temperature for specified duration
+} ReflowPhaseType_TypeDef;
+
 typedef struct {
   int16_t StartTemperature;
   int16_t TargetTemperature;
-  uint8_t SecondsToTarget;
+  uint16_t RampTimeSeconds;     // Time to ramp from start to target
+  uint16_t HoldTimeSeconds;     // Time to hold at target temperature
+  ReflowPhaseType_TypeDef Type; // Phase type (RAMP or HOLD)
 } ReflowProfile_TypeDef;
+
+typedef enum {
+  REFLOW_STATE_RAMPING = 0,  // Currently ramping to target
+  REFLOW_STATE_HOLDING,      // Currently holding at target
+  REFLOW_STATE_COMPLETE      // Phase complete, ready for next
+} ReflowState_TypeDef;
 /* USER CODE END ET */
 
 /* Exported constants --------------------------------------------------------*/
@@ -93,6 +106,7 @@ void Error_Handler(void);
 #define PID_MAX      (ZX_COUNT_MAX)
 #define PID_MIN      (0)
 #define PID_T        (PID_MAX * (1 / 60))
+#define TEMP_TOLERANCE (3)  // Temperature tolerance in °C for hold phase
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus
