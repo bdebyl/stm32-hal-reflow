@@ -24,6 +24,7 @@
 /* USER CODE BEGIN Includes */
 #include "lcd.h"
 #include "pid.h"
+#include "pid_int.h"
 #include "menu.h"
 #include <stdio.h>
 #include <string.h>
@@ -62,6 +63,8 @@ static PID         reflowPid = {.Kp       = 40.0f,
                                 .tau      = 0.2f,
                                 .LimitMax = (float)PID_MAX,
                                 .LimitMin = (float)PID_MIN};
+
+static PID_Int     reflowPidInt = {0};
 
 // static uint8_t              TestState = 0x00;
 static uint16_t ZXCounter         = 0x00;
@@ -104,6 +107,7 @@ static void MX_NVIC_Init(void);
 /* USER CODE BEGIN PFP */
 static void MX_LCD_1_Init(void);
 static void MX_PID_Init(void);
+static void MX_PID_Int_Init(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -195,7 +199,15 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
     ZXCounter++;
     if (ZXCounter == ZX_COUNT_MAX) {
 
-      OvenPWM = PID_Update(&reflowPid, SetPoint, OvenTemperature);
+      // Run both PID implementations for comparison
+      int16_t ovenPWM_float = PID_Update(&reflowPid, SetPoint, OvenTemperature);
+      int16_t ovenPWM_int = PID_Int_Update(&reflowPidInt, SetPoint, OvenTemperature);
+      
+      // Use integer PID output for actual control 
+      OvenPWM = ovenPWM_int;
+      
+      // For debugging: both outputs are available for comparison
+      // ovenPWM_float and ovenPWM_int can be observed during debugging
 
       // Re-set the Zero-cross counter
       ZXCounter = 0;
@@ -255,6 +267,7 @@ int main(void) {
   /* USER CODE BEGIN 2 */
   MX_LCD_1_Init();
   MX_PID_Init();
+  MX_PID_Int_Init();
   
   /* Initialize menu system */
   Menu_Init(&Menu, &LCD);
@@ -602,6 +615,14 @@ static void MX_LCD_1_Init(void) {
 }
 
 static void MX_PID_Init(void) { PID_Init(&reflowPid); }
+
+static void MX_PID_Int_Init(void) { 
+  PID_Int_Init(&reflowPidInt);
+  PID_Int_SetGains(&reflowPidInt, 40.0f, 1.6f, 0.2f);
+  PID_Int_SetLimits(&reflowPidInt, PID_MIN, PID_MAX);
+  PID_Int_SetSampleTime(&reflowPidInt, (float)PID_T);
+  PID_Int_SetFilterTimeConstant(&reflowPidInt, 0.2f);
+}
 
 void        HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
   if (htim->Instance == TIM14) {

@@ -40,6 +40,7 @@ Core/Src/main.c \
 Core/Src/lcd.c \
 Core/Src/menu.c \
 Core/Src/pid.c \
+Core/Src/pid_int.c \
 Core/Src/stm32f0xx_it.c \
 Core/Src/stm32f0xx_hal_msp.c \
 Drivers/STM32F0xx_HAL_Driver/Src/stm32f0xx_hal_spi.c \
