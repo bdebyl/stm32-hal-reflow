@@ -73,6 +73,7 @@ static uint16_t ReflowTime        = 0;
 static uint8_t  ReflowIndex       = 0;
 static ReflowState_TypeDef ReflowState = REFLOW_STATE_RAMPING;
 static uint16_t HoldTimer         = 0;
+static uint8_t  SystemReady       = 0;  // Flag to indicate system is ready for operation
 
 // http://www.chipquik.com/datasheets/NC191SNL50.pdf
 // Enhanced reflow profile with ramp and hold phases
@@ -136,6 +137,10 @@ static uint8_t IsTemperatureWithinTolerance(int16_t current, int16_t target) {
 }
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
   if (GPIO_Pin == GPIO_BTN_Pin) {
+    // Only process button if system is ready (prevents spurious triggers on boot)
+    if (!SystemReady) {
+      return;
+    }
     //__HAL_TIM_SET_COUNTER(&htim3, 0);
     // TemperatureSetPoint = (float32_t)Enc_GetValue(&htim3);
     /*
@@ -255,14 +260,24 @@ int main(void) {
   MX_PID_Init();
   
   /* Allow hardware to settle before enabling EXTI interrupts */
-  HAL_Delay(500);
-  
+  HAL_Delay(1000);  // Increased delay for better power supply stabilization
+
   /* Clear any pending EXTI interrupts that may have occurred during init */
   __HAL_GPIO_EXTI_CLEAR_IT(GPIO_BTN_Pin);
   __HAL_GPIO_EXTI_CLEAR_IT(GPIO_ZX_DET_Pin);
-  
+
   /* Enable EXTI interrupts after settling delay */
   HAL_NVIC_EnableIRQ(EXTI4_15_IRQn);
+
+  /* Additional delay to ensure button is stable */
+  HAL_Delay(500);
+
+  /* Clear interrupts again after enabling */
+  __HAL_GPIO_EXTI_CLEAR_IT(GPIO_BTN_Pin);
+  __HAL_GPIO_EXTI_CLEAR_IT(GPIO_ZX_DET_Pin);
+
+  /* Mark system as ready for button input */
+  SystemReady = 1;
 
   const char *fmtStr = "%3dC";
   const char *fmtPid = "%d %c%d ";
@@ -559,7 +574,7 @@ static void MX_GPIO_Init(void) {
   /*Configure GPIO pin : GPIO_BTN_Pin */
   GPIO_InitStruct.Pin  = GPIO_BTN_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Pull = GPIO_PULLDOWN;  // Pull down to prevent floating input
   HAL_GPIO_Init(GPIO_BTN_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : GPIO_ZX_EN_Pin */
