@@ -74,6 +74,7 @@ static uint8_t  ReflowIndex       = 0;
 static ReflowState_TypeDef ReflowState = REFLOW_STATE_RAMPING;
 static uint16_t HoldTimer         = 0;
 static uint8_t  SystemReady       = 0;  // Flag to indicate system is ready for operation
+static uint8_t  WaitingForStartTemp = 0; // Flag to indicate waiting for start temperature
 
 // http://www.chipquik.com/datasheets/NC191SNL50.pdf
 // Enhanced reflow profile with ramp and hold phases
@@ -184,6 +185,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
       ReflowTime        = 0;
       ReflowState       = REFLOW_STATE_RAMPING;
       HoldTimer         = 0;
+      WaitingForStartTemp = 1;  // Wait for start temperature before beginning profile
       HAL_TIM_Base_Start_IT(&htim17);
     }
   }
@@ -314,7 +316,9 @@ int main(void) {
     LCD_SetCursorPosition(&LCD, pidPos);
     char stateChar = 'I';  // Idle
     if (DoReflow) {
-      if (ReflowState == REFLOW_STATE_RAMPING) {
+      if (WaitingForStartTemp) {
+        stateChar = 'W';  // Waiting for start temperature
+      } else if (ReflowState == REFLOW_STATE_RAMPING) {
         stateChar = 'R';  // Ramping
       } else if (ReflowState == REFLOW_STATE_HOLDING) {
         stateChar = 'H';  // Holding
@@ -641,12 +645,24 @@ void        HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
         ReflowTime        = 0;
         ReflowState       = REFLOW_STATE_RAMPING;
         HoldTimer         = 0;
+        WaitingForStartTemp = 0;
         SetPoint          = 20;
         HAL_TIM_Base_Stop_IT(&htim17);
         return;
       }
 
       ReflowProfile_TypeDef currentProfile = ReflowProfile[ReflowIndex];
+
+      // Check if we need to wait for start temperature before beginning profile
+      if (WaitingForStartTemp) {
+        SetPoint = currentProfile.StartTemperature;
+
+        // Only proceed when actual temperature reaches start temperature (within tolerance)
+        if (IsTemperatureWithinTolerance(OvenTemperature, currentProfile.StartTemperature)) {
+          WaitingForStartTemp = 0;  // Start temperature reached, begin profile execution
+        }
+        return;  // Stay in this state until start temperature is reached
+      }
 
       switch (currentProfile.Type) {
         case REFLOW_PHASE_RAMP:
@@ -655,49 +671,62 @@ void        HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
             if (currentProfile.RampTimeSeconds > 0) {
               // Calculate linear setpoint during ramp
               SetPoint = CalculateLinearSetPoint(
-                         currentProfile.StartTemperature, 
+                         currentProfile.StartTemperature,
                          currentProfile.TargetTemperature,
-                         currentProfile.RampTimeSeconds, 
+                         currentProfile.RampTimeSeconds,
                          ReflowTime);
-              
+
               ReflowTime++;
-              
-              // Check if ramp time completed or target reached
-              if (ReflowTime >= currentProfile.RampTimeSeconds || 
-                  IsTemperatureWithinTolerance(OvenTemperature, currentProfile.TargetTemperature)) {
-                
+
+              // Check if target temperature reached (prioritize actual temperature over time)
+              if (IsTemperatureWithinTolerance(OvenTemperature, currentProfile.TargetTemperature)) {
                 if (currentProfile.HoldTimeSeconds > 0) {
                   // Start hold phase
                   ReflowState = REFLOW_STATE_HOLDING;
                   HoldTimer = 0;
                   SetPoint = currentProfile.TargetTemperature;
                 } else {
-                  // No hold phase, move to next profile
+                  // No hold phase, move to next profile but wait for next start temperature
                   ReflowIndex++;
                   ReflowTime = 0;
                   ReflowState = REFLOW_STATE_RAMPING;
+                  WaitingForStartTemp = 1;  // Wait for next profile's start temperature
+                }
+              } else if (ReflowTime >= currentProfile.RampTimeSeconds) {
+                // Ramp time exceeded but target not reached - force setpoint to target
+                SetPoint = currentProfile.TargetTemperature;
+                if (currentProfile.HoldTimeSeconds > 0) {
+                  // Start hold phase (will wait for temperature to reach target)
+                  ReflowState = REFLOW_STATE_HOLDING;
+                  HoldTimer = 0;
+                } else {
+                  // No hold phase, but still wait for target to be reached before advancing
+                  // Stay in RAMPING state with target setpoint until temperature reached
                 }
               }
             } else {
-              // Instant target (no ramp time)
+              // Instant target (no ramp time) - wait for temperature to reach target
               SetPoint = currentProfile.TargetTemperature;
-              if (currentProfile.HoldTimeSeconds > 0) {
-                ReflowState = REFLOW_STATE_HOLDING;
-                HoldTimer = 0;
-              } else {
-                ReflowIndex++;
-                ReflowTime = 0;
+              if (IsTemperatureWithinTolerance(OvenTemperature, currentProfile.TargetTemperature)) {
+                if (currentProfile.HoldTimeSeconds > 0) {
+                  ReflowState = REFLOW_STATE_HOLDING;
+                  HoldTimer = 0;
+                } else {
+                  ReflowIndex++;
+                  ReflowTime = 0;
+                  WaitingForStartTemp = 1;  // Wait for next profile's start temperature
+                }
               }
             }
           } else if (ReflowState == REFLOW_STATE_HOLDING) {
             // Hold at target temperature
             SetPoint = currentProfile.TargetTemperature;
-            
+
             // Only increment hold timer if temperature is within tolerance
             if (IsTemperatureWithinTolerance(OvenTemperature, currentProfile.TargetTemperature)) {
               HoldTimer++;
             }
-            
+
             // Check if hold time completed
             if (HoldTimer >= currentProfile.HoldTimeSeconds) {
               // Move to next profile
@@ -705,19 +734,20 @@ void        HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
               ReflowTime = 0;
               ReflowState = REFLOW_STATE_RAMPING;
               HoldTimer = 0;
+              WaitingForStartTemp = 1;  // Wait for next profile's start temperature
             }
           }
           break;
 
         case REFLOW_PHASE_HOLD:
-          // Pure hold phase (no ramping)
+          // Pure hold phase (no ramping) - wait for target temperature before starting hold timer
           SetPoint = currentProfile.TargetTemperature;
-          
+
           // Only increment hold timer if temperature is within tolerance
           if (IsTemperatureWithinTolerance(OvenTemperature, currentProfile.TargetTemperature)) {
             HoldTimer++;
           }
-          
+
           // Check if hold time completed
           if (HoldTimer >= currentProfile.HoldTimeSeconds) {
             // Move to next profile
@@ -725,6 +755,7 @@ void        HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
             ReflowTime = 0;
             ReflowState = REFLOW_STATE_RAMPING;
             HoldTimer = 0;
+            WaitingForStartTemp = 1;  // Wait for next profile's start temperature
           }
           break;
       }
