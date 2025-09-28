@@ -23,7 +23,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "lcd.h"
-#include "pid.h"
+#include "pid_int.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -53,43 +53,64 @@ TIM_HandleTypeDef htim17;
 /* USER CODE BEGIN PV */
 static uint8_t     tcSPIData[4]; // 32-bits
 static LCD_TypeDef LCD       = {0};
-static PID         reflowPid = {.Kp       = 40.0f,
-                                .Ki       = 1.6f,
-                                .Kd       = 0.2f,
-                                .T        = (float)PID_T,
-                                .tau      = 0.2f,
-                                .LimitMax = (float)PID_MAX,
-                                .LimitMin = (float)PID_MIN};
+static PID_INT     reflowPid = {.Kp         = 3604480, // 55.0 * 65536
+                                .Ki         = 983040,  // 15.0 * 65536
+                                .Kd         = 32768,   // 0.5 * 65536
+                                .integral   = 0,
+                                .prev_error = 0,
+                                .out_min    = PID_MIN,
+                                .out_max    = PID_MAX};
 
 // static uint8_t              TestState = 0x00;
-static uint16_t ZXCounter         = 0x00;
-static uint8_t  OvenControlEnable = 0x00;
-static int16_t  OvenTemperature   = 0x00;
-static int16_t  OvenPWM           = 0x00;
-static int16_t  SetPoint          = 20;
+static uint16_t            ZXCounter         = 0x00;
+static uint8_t             OvenControlEnable = 0x00;
+static int16_t             OvenTemperature   = 0x00;
+static int16_t             OvenPWM           = 0x00;
+static int16_t             SetPoint = 0; // No temperature target in idle state
 
-static uint8_t  DoReflow          = 0;
-static uint16_t ReflowTime        = 0;
-static uint8_t  ReflowIndex       = 0;
+static uint8_t             DoReflow = 0;
+static uint16_t            ReflowTime  = 0;
+static uint8_t             ReflowIndex = 0;
 static ReflowState_TypeDef ReflowState = REFLOW_STATE_RAMPING;
-static uint16_t HoldTimer         = 0;
-static uint8_t  SystemReady       = 0;  // Flag to indicate system is ready for operation
-static uint8_t  WaitingForStartTemp = 0; // Flag to indicate waiting for start temperature
+static uint16_t            HoldTimer   = 0;
+static uint8_t             SystemReady =
+    0; // Flag to indicate system is ready for operation
+static uint8_t WaitingForStartTemp =
+    0; // Flag to indicate waiting for start temperature
 
 // http://www.chipquik.com/datasheets/NC191SNL50.pdf
 // Enhanced reflow profile with ramp and hold phases
 static ReflowProfile_TypeDef ReflowProfile[] = {
-    // Preheat ramp: 25°C to 150°C over 90 seconds
-    {.StartTemperature = 25, .TargetTemperature = 150, .RampTimeSeconds = 90, .HoldTimeSeconds = 0, .Type = REFLOW_PHASE_RAMP},
+    // Preheat ramp: 50°C to 150°C over 90 seconds
+    {.StartTemperature  = 50,
+     .TargetTemperature = 150,
+     .RampTimeSeconds   = 90,
+     .HoldTimeSeconds   = 0,
+     .Type              = REFLOW_PHASE_RAMP},
     // Preheat soak: Hold at 150°C for 60 seconds
-    {.StartTemperature = 150, .TargetTemperature = 150, .RampTimeSeconds = 0, .HoldTimeSeconds = 60, .Type = REFLOW_PHASE_HOLD},
+    {.StartTemperature  = 150,
+     .TargetTemperature = 150,
+     .RampTimeSeconds   = 0,
+     .HoldTimeSeconds   = 60,
+     .Type              = REFLOW_PHASE_HOLD},
     // Ramp to reflow: 150°C to 217°C over 30 seconds
-    {.StartTemperature = 150, .TargetTemperature = 217, .RampTimeSeconds = 30, .HoldTimeSeconds = 0, .Type = REFLOW_PHASE_RAMP},
+    {.StartTemperature  = 150,
+     .TargetTemperature = 217,
+     .RampTimeSeconds   = 30,
+     .HoldTimeSeconds   = 0,
+     .Type              = REFLOW_PHASE_RAMP},
     // Reflow peak: 217°C to 249°C over 30 seconds, hold for 10 seconds
-    {.StartTemperature = 217, .TargetTemperature = 249, .RampTimeSeconds = 30, .HoldTimeSeconds = 10, .Type = REFLOW_PHASE_RAMP},
+    {.StartTemperature  = 217,
+     .TargetTemperature = 249,
+     .RampTimeSeconds   = 30,
+     .HoldTimeSeconds   = 10,
+     .Type              = REFLOW_PHASE_RAMP},
     // Cooling: Let natural cooling take over
-    {.StartTemperature = 249, .TargetTemperature = 25, .RampTimeSeconds = 0, .HoldTimeSeconds = 0, .Type = REFLOW_PHASE_RAMP}
-};
+    {.StartTemperature  = 249,
+     .TargetTemperature = 50,
+     .RampTimeSeconds   = 0,
+     .HoldTimeSeconds   = 0,
+     .Type              = REFLOW_PHASE_RAMP}};
 
 /* USER CODE END PV */
 
@@ -121,24 +142,27 @@ static int16_t CalculateLinearSetPoint(int16_t beginTemp, int16_t endTemp,
                                        uint16_t totalSeconds,
                                        uint16_t currentSecond) {
   if (totalSeconds == 0 || beginTemp == endTemp) {
-    return endTemp;  // No ramp needed
+    return endTemp; // No ramp needed
   }
-  
-  // Simple linear interpolation: y = mx + b
-  float slope = (float)(endTemp - beginTemp) / (float)totalSeconds;
-  float newSetPoint = slope * (float)currentSecond + (float)beginTemp;
+
+  // Integer linear interpolation: y = mx + b
+  // Use 32-bit intermediate calculation to prevent overflow
+  int32_t tempDiff    = endTemp - beginTemp;
+  int32_t newSetPoint = beginTemp + (tempDiff * currentSecond) / totalSeconds;
 
   return (int16_t)newSetPoint;
 }
 
 static uint8_t IsTemperatureWithinTolerance(int16_t current, int16_t target) {
   int16_t diff = current - target;
-  if (diff < 0) diff = -diff;  // Absolute value
+  if (diff < 0)
+    diff = -diff; // Absolute value
   return (diff <= TEMP_TOLERANCE);
 }
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
   if (GPIO_Pin == GPIO_BTN_Pin) {
-    // Only process button if system is ready (prevents spurious triggers on boot)
+    // Only process button if system is ready (prevents spurious triggers on
+    // boot)
     if (!SystemReady) {
       return;
     }
@@ -185,7 +209,8 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
       ReflowTime        = 0;
       ReflowState       = REFLOW_STATE_RAMPING;
       HoldTimer         = 0;
-      WaitingForStartTemp = 1;  // Wait for start temperature before beginning profile
+      WaitingForStartTemp =
+          1; // Wait for start temperature before beginning profile
       HAL_TIM_Base_Start_IT(&htim17);
     }
   }
@@ -200,7 +225,22 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
     ZXCounter++;
     if (ZXCounter == ZX_COUNT_MAX) {
 
-      OvenPWM = PID_Update(&reflowPid, SetPoint, OvenTemperature);
+      // Only run PID when oven control is enabled (during reflow)
+      if (OvenControlEnable) {
+        OvenPWM = PID_INT_Update(&reflowPid, SetPoint, OvenTemperature);
+
+        // Add feedforward component for high temperatures
+        // At 250°C, add ~20% baseline power to overcome heat losses
+        if (SetPoint > 200) {
+          int16_t feedforward =
+              (SetPoint - 200) / 5; // 0-10 extra PWM at 200-250°C
+          OvenPWM += feedforward;
+          if (OvenPWM > PID_MAX)
+            OvenPWM = PID_MAX;
+        }
+      } else {
+        OvenPWM = 0; // No output when idle
+      }
 
       // Re-set the Zero-cross counter
       ZXCounter = 0;
@@ -260,9 +300,28 @@ int main(void) {
   /* USER CODE BEGIN 2 */
   MX_LCD_1_Init();
   MX_PID_Init();
-  
+
+  // Display startup splash screen
+  LCD_PositionTypeDef splashRow1 = {.Column = 0, .Row = LCD_ROW_1};
+  LCD_PositionTypeDef splashRow2 = {.Column = 0, .Row = LCD_ROW_2};
+  char                brandingMsg[21];
+  char                bootingMsg[21];
+
+  // Use memcpy to avoid null terminator issues
+  memcpy(brandingMsg, " de Byl Reflow Oven ",
+         20); // Centered: 1 space + 18 chars + 1 space
+  memcpy(bootingMsg, "     Booting...     ",
+         20);             // Centered: 5 spaces + 10 chars + 5 spaces
+  brandingMsg[20] = '\0'; // Null terminate for safety
+  bootingMsg[20]  = '\0';
+
+  LCD_SetCursorPosition(&LCD, splashRow1);
+  LCD_WriteString(&LCD, brandingMsg, 20);
+  LCD_SetCursorPosition(&LCD, splashRow2);
+  LCD_WriteString(&LCD, bootingMsg, 20);
+
   /* Allow hardware to settle before enabling EXTI interrupts */
-  HAL_Delay(1000);  // Increased delay for better power supply stabilization
+  HAL_Delay(1000); // Increased delay for better power supply stabilization
 
   /* Clear any pending EXTI interrupts that may have occurred during init */
   __HAL_GPIO_EXTI_CLEAR_IT(GPIO_BTN_Pin);
@@ -281,24 +340,12 @@ int main(void) {
   /* Mark system as ready for button input */
   SystemReady = 1;
 
-  const char *fmtStr = "%3dC";
-  const char *fmtPid = "%d %c%d ";
-  char        lcdStr[7 + 1];
-  char        lcdPidStr[16];
-  memset(lcdStr, ' ', 5);
-  char               *tempStr = "Temperature: ";
-  char               *pidStr  = "Set: ";
+  char          lcdRow1[21]; // 20 chars + null terminator
+  char          lcdRow2[21]; // 20 chars + null terminator
+  const uint8_t totalPhases = sizeof(ReflowProfile) / sizeof(ReflowProfile[0]);
 
-  LCD_PositionTypeDef tempPos = {.Column = strlen(tempStr), .Row = LCD_ROW_1};
-  LCD_PositionTypeDef pidPos  = {.Column = 0, .Row = LCD_ROW_2};
-  if (LCD_WriteString(&LCD, tempStr, strlen(tempStr)) != HAL_OK) {
-    Error_Handler();
-  }
-  LCD_SetCursorPosition(&LCD, pidPos);
-  if (LCD_WriteString(&LCD, pidStr, strlen(pidStr)) != HAL_OK) {
-    Error_Handler();
-  }
-  pidPos.Column = strlen(pidStr);
+  LCD_PositionTypeDef row1Pos = {.Column = 0, .Row = LCD_ROW_1};
+  LCD_PositionTypeDef row2Pos = {.Column = 0, .Row = LCD_ROW_2};
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -307,25 +354,74 @@ int main(void) {
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    // Print temperature
-    LCD_SetCursorPosition(&LCD, tempPos);
-    sprintf(lcdStr, fmtStr, OvenTemperature);
-    LCD_WriteString(&LCD, lcdStr, strlen(lcdStr));
+    // First row: "Reflow: OFF/ON" with right-aligned temperature
+    const char *reflowState = DoReflow ? "ON " : "OFF";
+    // Clamp temperature to display range to prevent truncation warnings
+    int displayTemp = OvenTemperature;
+    if (displayTemp < 0)
+      displayTemp = 0;
+    if (displayTemp > 999)
+      displayTemp = 999;
+    snprintf(lcdRow1, sizeof(lcdRow1), "Reflow: %-7s%4dC", reflowState,
+             displayTemp);
+    LCD_SetCursorPosition(&LCD, row1Pos);
+    LCD_WriteString(&LCD, lcdRow1, 20); // Always write exactly 20 characters
 
-    // Print PID and reflow state
-    LCD_SetCursorPosition(&LCD, pidPos);
-    char stateChar = 'I';  // Idle
-    if (DoReflow) {
-      if (WaitingForStartTemp) {
-        stateChar = 'W';  // Waiting for start temperature
-      } else if (ReflowState == REFLOW_STATE_RAMPING) {
-        stateChar = 'R';  // Ramping
-      } else if (ReflowState == REFLOW_STATE_HOLDING) {
-        stateChar = 'H';  // Holding
+    // Second row: Phase name, segment progress, and right-aligned setpoint
+    const char *phaseName;
+    char        segmentStr[8] = ""; // For "[x/y]" or empty when idle
+
+    if (!DoReflow) {
+      phaseName = "IDLE";
+      // segmentStr remains empty for idle state
+    } else if (WaitingForStartTemp) {
+      phaseName = "WAIT";
+      snprintf(segmentStr, sizeof(segmentStr), "[%d/%d]", ReflowIndex + 1,
+               totalPhases);
+    } else if (ReflowState == REFLOW_STATE_RAMPING) {
+      phaseName = "RAMP";
+      snprintf(segmentStr, sizeof(segmentStr), "[%d/%d]", ReflowIndex + 1,
+               totalPhases);
+    } else if (ReflowState == REFLOW_STATE_HOLDING) {
+      phaseName = "HOLD";
+      snprintf(segmentStr, sizeof(segmentStr), "[%d/%d]", ReflowIndex + 1,
+               totalPhases);
+    } else {
+      phaseName = "IDLE";
+    }
+
+    // Format row 2 based on state
+    if (!DoReflow) {
+      // IDLE state: Just show "IDLE" with no temperature or segment info
+      snprintf(lcdRow2, sizeof(lcdRow2), "%-20s", "IDLE");
+    } else {
+      // Active reflow: Show "PHASE [x/y]      123C"
+      int phaseLen = strlen(phaseName) + strlen(segmentStr);
+      int padding  = 16 - phaseLen; // 20 total - 4 for temp = 16 available
+      if (padding < 0)
+        padding = 0;
+      if (padding > 15)
+        padding = 15; // Limit padding to prevent buffer overflow
+
+      // Clamp setpoint temperature for display
+      int displaySetpoint = SetPoint;
+      if (displaySetpoint < 0)
+        displaySetpoint = 0;
+      if (displaySetpoint > 999)
+        displaySetpoint = 999;
+
+      // Ensure the format string never exceeds 20 characters
+      int written = snprintf(lcdRow2, sizeof(lcdRow2), "%s%s%*s%3dC", phaseName,
+                             segmentStr, padding, "", displaySetpoint);
+      if (written >= sizeof(lcdRow2)) {
+        // Fallback: truncate to exactly 20 characters
+        snprintf(lcdRow2, sizeof(lcdRow2), "%-15s%4dC", phaseName,
+                 displaySetpoint);
       }
     }
-    sprintf(lcdPidStr, fmtPid, SetPoint, stateChar, ReflowIndex);
-    LCD_WriteString(&LCD, lcdPidStr, strlen(lcdPidStr));
+
+    LCD_SetCursorPosition(&LCD, row2Pos);
+    LCD_WriteString(&LCD, lcdRow2, 20); // Always write exactly 20 characters
     HAL_Delay(200);
   }
   /* USER CODE END 3 */
@@ -577,8 +673,9 @@ static void MX_GPIO_Init(void) {
 
   /*Configure GPIO pin : GPIO_BTN_Pin */
   GPIO_InitStruct.Pin  = GPIO_BTN_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
-  GPIO_InitStruct.Pull = GPIO_PULLDOWN;  // Pull down to prevent floating input
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING; // Falling edge for button press
+                                               // (button pulls to ground)
+  GPIO_InitStruct.Pull = GPIO_NOPULL; // External pull-up resistor present
   HAL_GPIO_Init(GPIO_BTN_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : GPIO_ZX_EN_Pin */
@@ -628,7 +725,7 @@ static void MX_LCD_1_Init(void) {
   LCD_Init(&LCD, &LCD_InitStruct);
 }
 
-static void MX_PID_Init(void) { PID_Init(&reflowPid); }
+static void MX_PID_Init(void) { PID_INT_Init(&reflowPid); }
 
 void        HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
   if (htim->Instance == TIM14) {
@@ -639,14 +736,14 @@ void        HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
       // Check if we've completed all profile stages
       if (ReflowIndex >= (sizeof(ReflowProfile) / sizeof(ReflowProfile[0]))) {
         // Stop the reflow
-        DoReflow          = 0;
-        OvenControlEnable = 0;
-        ReflowIndex       = 0;
-        ReflowTime        = 0;
-        ReflowState       = REFLOW_STATE_RAMPING;
-        HoldTimer         = 0;
+        DoReflow            = 0;
+        OvenControlEnable   = 0;
+        ReflowIndex         = 0;
+        ReflowTime          = 0;
+        ReflowState         = REFLOW_STATE_RAMPING;
+        HoldTimer           = 0;
         WaitingForStartTemp = 0;
-        SetPoint          = 20;
+        SetPoint = 0; // Return to idle state - no temperature control
         HAL_TIM_Base_Stop_IT(&htim17);
         return;
       }
@@ -657,94 +754,94 @@ void        HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
       if (WaitingForStartTemp) {
         SetPoint = currentProfile.StartTemperature;
 
-        // Only proceed when actual temperature reaches start temperature (within tolerance)
-        if (IsTemperatureWithinTolerance(OvenTemperature, currentProfile.StartTemperature)) {
-          WaitingForStartTemp = 0;  // Start temperature reached, begin profile execution
+        // Only proceed when actual temperature reaches start temperature
+        // (within tolerance)
+        if (IsTemperatureWithinTolerance(OvenTemperature,
+                                                currentProfile.StartTemperature)) {
+          WaitingForStartTemp =
+              0; // Start temperature reached, begin profile execution
         }
-        return;  // Stay in this state until start temperature is reached
+        return; // Stay in this state until start temperature is reached
       }
 
       switch (currentProfile.Type) {
-        case REFLOW_PHASE_RAMP:
-          // Handle ramping phase
-          if (ReflowState == REFLOW_STATE_RAMPING) {
-            if (currentProfile.RampTimeSeconds > 0) {
-              // Calculate linear setpoint during ramp
-              SetPoint = CalculateLinearSetPoint(
-                         currentProfile.StartTemperature,
-                         currentProfile.TargetTemperature,
-                         currentProfile.RampTimeSeconds,
-                         ReflowTime);
+      case REFLOW_PHASE_RAMP:
+        // Handle ramping phase
+        if (ReflowState == REFLOW_STATE_RAMPING) {
+          if (currentProfile.RampTimeSeconds > 0) {
+            // Calculate linear setpoint during ramp
+            SetPoint = CalculateLinearSetPoint(currentProfile.StartTemperature,
+                                                      currentProfile.TargetTemperature,
+                                                      currentProfile.RampTimeSeconds,
+                                                      ReflowTime);
 
-              ReflowTime++;
+            ReflowTime++;
 
-              // Check if target temperature reached (prioritize actual temperature over time)
-              if (IsTemperatureWithinTolerance(OvenTemperature, currentProfile.TargetTemperature)) {
-                if (currentProfile.HoldTimeSeconds > 0) {
-                  // Start hold phase
-                  ReflowState = REFLOW_STATE_HOLDING;
-                  HoldTimer = 0;
-                  SetPoint = currentProfile.TargetTemperature;
-                } else {
-                  // No hold phase, move to next profile but wait for next start temperature
-                  ReflowIndex++;
-                  ReflowTime = 0;
-                  ReflowState = REFLOW_STATE_RAMPING;
-                  WaitingForStartTemp = 1;  // Wait for next profile's start temperature
-                }
-              } else if (ReflowTime >= currentProfile.RampTimeSeconds) {
-                // Ramp time exceeded but target not reached - force setpoint to target
-                SetPoint = currentProfile.TargetTemperature;
-                if (currentProfile.HoldTimeSeconds > 0) {
-                  // Start hold phase (will wait for temperature to reach target)
-                  ReflowState = REFLOW_STATE_HOLDING;
-                  HoldTimer = 0;
-                } else {
-                  // No hold phase, but still wait for target to be reached before advancing
-                  // Stay in RAMPING state with target setpoint until temperature reached
-                }
+            // Check if target temperature reached (prioritize actual
+            // temperature over time)
+            if (IsTemperatureWithinTolerance(
+                    OvenTemperature, currentProfile.TargetTemperature)) {
+              if (currentProfile.HoldTimeSeconds > 0) {
+                // Start hold phase
+                ReflowState = REFLOW_STATE_HOLDING;
+                HoldTimer   = 0;
+                SetPoint    = currentProfile.TargetTemperature;
+              } else {
+                // No hold phase, move to next profile but wait for next start
+                // temperature
+                ReflowIndex++;
+                ReflowTime  = 0;
+                ReflowState = REFLOW_STATE_RAMPING;
+                WaitingForStartTemp =
+                    1; // Wait for next profile's start temperature
               }
-            } else {
-              // Instant target (no ramp time) - wait for temperature to reach target
+            } else if (ReflowTime >= currentProfile.RampTimeSeconds) {
+              // Ramp time exceeded but target not reached - force setpoint to
+              // target and wait
               SetPoint = currentProfile.TargetTemperature;
-              if (IsTemperatureWithinTolerance(OvenTemperature, currentProfile.TargetTemperature)) {
+              // Stay in RAMPING state until temperature actually reaches target
+              // Only then proceed to hold phase or next profile
+              if (IsTemperatureWithinTolerance(
+                      OvenTemperature, currentProfile.TargetTemperature)) {
                 if (currentProfile.HoldTimeSeconds > 0) {
+                  // Start hold phase now that temperature is reached
                   ReflowState = REFLOW_STATE_HOLDING;
-                  HoldTimer = 0;
+                  HoldTimer   = 0;
                 } else {
+                  // No hold phase, move to next profile
                   ReflowIndex++;
-                  ReflowTime = 0;
-                  WaitingForStartTemp = 1;  // Wait for next profile's start temperature
+                  ReflowTime          = 0;
+                  ReflowState         = REFLOW_STATE_RAMPING;
+                  WaitingForStartTemp = 1;
                 }
               }
+              // If temperature not reached, stay in RAMPING state with target
+              // setpoint
             }
-          } else if (ReflowState == REFLOW_STATE_HOLDING) {
-            // Hold at target temperature
+          } else {
+            // Instant target (no ramp time) - wait for temperature to reach
+            // target
             SetPoint = currentProfile.TargetTemperature;
-
-            // Only increment hold timer if temperature is within tolerance
-            if (IsTemperatureWithinTolerance(OvenTemperature, currentProfile.TargetTemperature)) {
-              HoldTimer++;
-            }
-
-            // Check if hold time completed
-            if (HoldTimer >= currentProfile.HoldTimeSeconds) {
-              // Move to next profile
-              ReflowIndex++;
-              ReflowTime = 0;
-              ReflowState = REFLOW_STATE_RAMPING;
-              HoldTimer = 0;
-              WaitingForStartTemp = 1;  // Wait for next profile's start temperature
+            if (IsTemperatureWithinTolerance(
+                    OvenTemperature, currentProfile.TargetTemperature)) {
+              if (currentProfile.HoldTimeSeconds > 0) {
+                ReflowState = REFLOW_STATE_HOLDING;
+                HoldTimer   = 0;
+              } else {
+                ReflowIndex++;
+                ReflowTime = 0;
+                WaitingForStartTemp =
+                    1; // Wait for next profile's start temperature
+              }
             }
           }
-          break;
-
-        case REFLOW_PHASE_HOLD:
-          // Pure hold phase (no ramping) - wait for target temperature before starting hold timer
+        } else if (ReflowState == REFLOW_STATE_HOLDING) {
+          // Hold at target temperature
           SetPoint = currentProfile.TargetTemperature;
 
           // Only increment hold timer if temperature is within tolerance
-          if (IsTemperatureWithinTolerance(OvenTemperature, currentProfile.TargetTemperature)) {
+          if (IsTemperatureWithinTolerance(OvenTemperature,
+                                                  currentProfile.TargetTemperature)) {
             HoldTimer++;
           }
 
@@ -752,12 +849,36 @@ void        HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
           if (HoldTimer >= currentProfile.HoldTimeSeconds) {
             // Move to next profile
             ReflowIndex++;
-            ReflowTime = 0;
+            ReflowTime  = 0;
             ReflowState = REFLOW_STATE_RAMPING;
-            HoldTimer = 0;
-            WaitingForStartTemp = 1;  // Wait for next profile's start temperature
+            HoldTimer   = 0;
+            WaitingForStartTemp =
+                1; // Wait for next profile's start temperature
           }
-          break;
+        }
+        break;
+
+      case REFLOW_PHASE_HOLD:
+        // Pure hold phase (no ramping) - wait for target temperature before
+        // starting hold timer
+        SetPoint = currentProfile.TargetTemperature;
+
+        // Only increment hold timer if temperature is within tolerance
+        if (IsTemperatureWithinTolerance(OvenTemperature,
+                                                currentProfile.TargetTemperature)) {
+          HoldTimer++;
+        }
+
+        // Check if hold time completed
+        if (HoldTimer >= currentProfile.HoldTimeSeconds) {
+          // Move to next profile
+          ReflowIndex++;
+          ReflowTime  = 0;
+          ReflowState = REFLOW_STATE_RAMPING;
+          HoldTimer   = 0;
+          WaitingForStartTemp = 1; // Wait for next profile's start temperature
+        }
+        break;
       }
     }
   }
