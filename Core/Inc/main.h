@@ -81,27 +81,27 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
-#define GPIO_CS0_Pin          GPIO_PIN_4
-#define GPIO_CS0_GPIO_Port    GPIOC
-#define GPIO_CS1_Pin          GPIO_PIN_5
-#define GPIO_CS1_GPIO_Port    GPIOC
-#define GPIO_LCD_RS_Pin       GPIO_PIN_10
+#define GPIO_CS0_Pin GPIO_PIN_4
+#define GPIO_CS0_GPIO_Port GPIOC
+#define GPIO_CS1_Pin GPIO_PIN_5
+#define GPIO_CS1_GPIO_Port GPIOC
+#define GPIO_LCD_RS_Pin GPIO_PIN_10
 #define GPIO_LCD_RS_GPIO_Port GPIOB
-#define GPIO_BTN_Pin          GPIO_PIN_8
-#define GPIO_BTN_GPIO_Port    GPIOC
-#define GPIO_BTN_EXTI_IRQn    EXTI4_15_IRQn
-#define GPIO_ZX_EN_Pin        GPIO_PIN_9
-#define GPIO_ZX_EN_GPIO_Port  GPIOA
-#define GPIO_ZX_DET_Pin       GPIO_PIN_10
+#define GPIO_BTN_Pin GPIO_PIN_8
+#define GPIO_BTN_GPIO_Port GPIOC
+#define GPIO_BTN_EXTI_IRQn EXTI4_15_IRQn
+#define GPIO_ZX_EN_Pin GPIO_PIN_9
+#define GPIO_ZX_EN_GPIO_Port GPIOA
+#define GPIO_ZX_DET_Pin GPIO_PIN_10
 #define GPIO_ZX_DET_GPIO_Port GPIOA
 #define GPIO_ZX_DET_EXTI_IRQn EXTI4_15_IRQn
-#define GPIO_R1E_Pin          GPIO_PIN_10
-#define GPIO_R1E_GPIO_Port    GPIOC
-#define GPIO_R2E_Pin          GPIO_PIN_11
-#define GPIO_R2E_GPIO_Port    GPIOC
-#define GPIO_LCD_E_Pin        GPIO_PIN_8
-#define GPIO_LCD_E_GPIO_Port  GPIOB
-#define GPIO_LCD_RW_Pin       GPIO_PIN_9
+#define GPIO_R1E_Pin GPIO_PIN_10
+#define GPIO_R1E_GPIO_Port GPIOC
+#define GPIO_R2E_Pin GPIO_PIN_11
+#define GPIO_R2E_GPIO_Port GPIOC
+#define GPIO_LCD_E_Pin GPIO_PIN_8
+#define GPIO_LCD_E_GPIO_Port GPIOB
+#define GPIO_LCD_RW_Pin GPIO_PIN_9
 #define GPIO_LCD_RW_GPIO_Port GPIOB
 /* USER CODE BEGIN Private defines */
 #define ARM_MATH_CM0
@@ -114,6 +114,16 @@ void Error_Handler(void);
 #define PID_T        (PID_MAX * (1 / 60))
 #define TEMP_TOLERANCE                                                         \
   (4) // Temperature tolerance in °C for phase transitions (allows ±4°C)
+
+// Per-zero-cross heater control: feedforward + small proportional, decided
+// per cycle and applied via Bresenham PDM.
+//   FF predicts steady-state duty: (SP - 25) / 7  →  ~30 at 235°C, ~10 at 100°C
+//   Kp gives a real proportional band: 2 PWM per °C error (saturates at ±30°C)
+#define FF_BASE_TEMP (25)
+#define FF_NUM       (1)
+#define FF_DEN       (7)
+#define KP_NUM       (2)
+#define KP_DEN       (1)
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus

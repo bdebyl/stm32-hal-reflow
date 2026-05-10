@@ -23,7 +23,6 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "lcd.h"
-#include "pid_int.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -44,29 +43,24 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-SPI_HandleTypeDef hspi1;
+ SPI_HandleTypeDef hspi1;
 
 TIM_HandleTypeDef htim3;
+TIM_HandleTypeDef htim6;
 TIM_HandleTypeDef htim14;
 TIM_HandleTypeDef htim17;
 
 /* USER CODE BEGIN PV */
 static uint8_t     tcSPIData[4]; // 32-bits
-static LCD_TypeDef LCD       = {0};
-static PID_INT     reflowPid = {.Kp         = 3604480, // 55.0 * 65536
-                                .Ki         = 983040,  // 15.0 * 65536
-                                .Kd         = 32768,   // 0.5 * 65536
-                                .integral   = 0,
-                                .prev_error = 0,
-                                .out_min    = PID_MIN,
-                                .out_max    = PID_MAX};
+static LCD_TypeDef LCD = {0};
 
 // static uint8_t              TestState = 0x00;
-static uint16_t            ZXCounter         = 0x00;
-static uint8_t             OvenControlEnable = 0x00;
-static int16_t             OvenTemperature   = 0x00;
-static int16_t             OvenPWM           = 0x00;
-static int16_t             SetPoint = 0; // No temperature target in idle state
+static uint8_t  OvenControlEnable = 0x00;
+static int16_t  OvenTemperature   = 0x00;
+static int16_t  SetPoint = 0; // No temperature target in idle state
+static uint8_t  HeatingActive   = 0; // Mirror of last commanded SSR state
+static int16_t  DutyAccumulator = 0; // Bresenham accumulator (0..ZX_COUNT_MAX)
+static volatile uint8_t ZxFallbackActive = 0; // 1 if ZX detector has stopped firing
 
 static uint8_t             DoReflow = 0;
 static uint16_t            ReflowTime  = 0;
@@ -178,16 +172,16 @@ static const ReflowProfileSet_TypeDef ReflowProfiles[] = {
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
-void        SystemClock_Config(void);
+void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_TIM14_Init(void);
 static void MX_TIM3_Init(void);
 static void MX_TIM17_Init(void);
+static void MX_TIM6_Init(void);
 static void MX_NVIC_Init(void);
 /* USER CODE BEGIN PFP */
 static void MX_LCD_1_Init(void);
-static void MX_PID_Init(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -221,6 +215,39 @@ static uint8_t IsTemperatureWithinTolerance(int16_t current, int16_t target) {
   if (diff < 0)
     diff = -diff; // Absolute value
   return (diff <= TEMP_TOLERANCE);
+}
+
+// Per-cycle heater control: feedforward (predicts steady-state duty) plus a
+// small proportional correction, applied via Bresenham PDM so the relays go
+// ON exactly `desired` times per ZX_COUNT_MAX cycles. Called from the ZX EXTI
+// for normal operation and from the TIM6 watchdog ISR if the ZX signal dies.
+static void DriveHeaterCycle(void) {
+  if (OvenControlEnable) {
+    int16_t error = SetPoint - OvenTemperature;
+    int16_t ff = (SetPoint > FF_BASE_TEMP)
+                     ? (int16_t)(((SetPoint - FF_BASE_TEMP) * FF_NUM) / FF_DEN)
+                     : 0;
+    int16_t prop    = (int16_t)((error * KP_NUM) / KP_DEN);
+    int16_t desired = ff + prop;
+    if (desired < 0)
+      desired = 0;
+    if (desired > ZX_COUNT_MAX)
+      desired = ZX_COUNT_MAX;
+
+    DutyAccumulator += desired;
+    if (DutyAccumulator >= ZX_COUNT_MAX) {
+      DutyAccumulator -= ZX_COUNT_MAX;
+      HeatingActive = 1;
+    } else {
+      HeatingActive = 0;
+    }
+  } else {
+    HeatingActive   = 0;
+    DutyAccumulator = 0;
+  }
+  GPIO_PinState st = HeatingActive ? GPIO_PIN_SET : GPIO_PIN_RESET;
+  HAL_GPIO_WritePin(GPIO_R1E_GPIO_Port, GPIO_R1E_Pin, st);
+  HAL_GPIO_WritePin(GPIO_R2E_GPIO_Port, GPIO_R2E_Pin, st);
 }
 
 // Regenerates the custom-profile array for a given peak. Soak segment is
@@ -311,6 +338,8 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
         ReflowTime        = 0;
         ReflowState       = REFLOW_STATE_RAMPING;
         HoldTimer         = 0;
+        DutyAccumulator   = 0; // Fresh PDM state for this run
+        HeatingActive     = 0;
         WaitingForStartTemp =
             1; // Wait for start temperature before beginning profile
         HAL_TIM_Base_Start_IT(&htim17);
@@ -318,66 +347,35 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
     }
   }
 
-  // Update GPIO PID from zero-cross detection
+  // Per-zero-cross heater control
   if (GPIO_Pin == GPIO_ZX_DET_Pin) {
-    // Get latest thermocouple temperature
+    // Pet the watchdog: as long as ZX keeps firing, TIM6 never expires.
+    __HAL_TIM_SET_COUNTER(&htim6, 0);
+    ZxFallbackActive = 0;
+
+    // Decode latest thermocouple temperature
     OvenTemperature =
         ((tcSPIData[0] & 0x7F) << 4) | ((tcSPIData[1] >> 4) & 0x0F);
 
-    // Increment zero-cross counter
-    ZXCounter++;
-    if (ZXCounter == ZX_COUNT_MAX) {
-
-      // Only run PID when oven control is enabled (during reflow)
-      if (OvenControlEnable) {
-        OvenPWM = PID_INT_Update(&reflowPid, SetPoint, OvenTemperature);
-
-        // Add feedforward component for high temperatures
-        // At 250°C, add ~20% baseline power to overcome heat losses
-        if (SetPoint > 200) {
-          int16_t feedforward =
-              (SetPoint - 200) / 5; // 0-10 extra PWM at 200-250°C
-          OvenPWM += feedforward;
-          if (OvenPWM > PID_MAX)
-            OvenPWM = PID_MAX;
-        }
-      } else {
-        OvenPWM = 0; // No output when idle
-      }
-
-      // Re-set the Zero-cross counter
-      ZXCounter = 0;
-    }
-    if (OvenControlEnable) {
-      if (ZXCounter < OvenPWM) {
-        HAL_GPIO_WritePin(GPIO_R1E_GPIO_Port, GPIO_R1E_Pin, GPIO_PIN_SET);
-        HAL_GPIO_WritePin(GPIO_R2E_GPIO_Port, GPIO_R2E_Pin, GPIO_PIN_SET);
-      } else {
-        HAL_GPIO_WritePin(GPIO_R1E_GPIO_Port, GPIO_R1E_Pin, GPIO_PIN_RESET);
-        HAL_GPIO_WritePin(GPIO_R2E_GPIO_Port, GPIO_R2E_Pin, GPIO_PIN_RESET);
-      }
-
-    } else {
-      HAL_GPIO_WritePin(GPIO_R1E_GPIO_Port, GPIO_R1E_Pin, GPIO_PIN_RESET);
-      HAL_GPIO_WritePin(GPIO_R2E_GPIO_Port, GPIO_R2E_Pin, GPIO_PIN_RESET);
-    }
+    // Compute desired duty for THIS half-cycle and drive the relays
+    DriveHeaterCycle();
   }
 }
 /* USER CODE END 0 */
 
 /**
- * @brief  The application entry point.
- * @retval int
- */
-int main(void) {
+  * @brief  The application entry point.
+  * @retval int
+  */
+int main(void)
+{
   /* USER CODE BEGIN 1 */
 
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
 
-  /* Reset of all peripherals, Initializes the Flash interface and the Systick.
-   */
+  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
   HAL_Init();
 
   /* USER CODE BEGIN Init */
@@ -397,12 +395,32 @@ int main(void) {
   MX_TIM14_Init();
   MX_TIM3_Init();
   MX_TIM17_Init();
+  MX_TIM6_Init();
 
   /* Initialize interrupts */
   MX_NVIC_Init();
   /* USER CODE BEGIN 2 */
+  // === REGEN-SURVIVAL OVERRIDES ===
+  // CubeMX defaults that we need to undo each regen. See "Regen survival
+  // checklist" in this file's header comment.
+
+  // 1. Re-init the button pin to FALLING edge — CubeMX keeps reverting this
+  //    to RISING (PC8 has an external pull-up, so a press is a FALLING edge).
+  {
+    GPIO_InitTypeDef btnInit = {0};
+    btnInit.Pin              = GPIO_BTN_Pin;
+    btnInit.Mode             = GPIO_MODE_IT_FALLING;
+    btnInit.Pull             = GPIO_NOPULL;
+    HAL_GPIO_Init(GPIO_BTN_GPIO_Port, &btnInit);
+  }
+
+  // 2. Disable EXTI4_15 immediately — CubeMX adds an enable in MX_NVIC_Init,
+  //    but we need it deferred until after the boot settle delay below to
+  //    avoid spurious ZX/button triggers. The deferred enable happens further
+  //    down once SystemReady=1.
+  HAL_NVIC_DisableIRQ(EXTI4_15_IRQn);
+
   MX_LCD_1_Init();
-  MX_PID_Init();
 
   // Display startup splash screen
   LCD_PositionTypeDef splashRow1 = {.Column = 0, .Row = LCD_ROW_1};
@@ -439,6 +457,12 @@ int main(void) {
   /* Clear interrupts again after enabling */
   __HAL_GPIO_EXTI_CLEAR_IT(GPIO_BTN_Pin);
   __HAL_GPIO_EXTI_CLEAR_IT(GPIO_ZX_DET_Pin);
+
+  /* Start the ZX-watchdog timer. Pet via ZX EXTI; if it ever expires, the
+   * TIM6 ISR takes over the SSR control loop. */
+  __HAL_TIM_SET_COUNTER(&htim6, 0);
+  __HAL_TIM_CLEAR_FLAG(&htim6, TIM_FLAG_UPDATE);
+  HAL_TIM_Base_Start_IT(&htim6);
 
   /* Mark system as ready for button input */
   SystemReady = 1;
@@ -508,8 +532,15 @@ int main(void) {
       displayTemp = 0;
     if (displayTemp > 999)
       displayTemp = 999;
-    snprintf(lcdRow1, sizeof(lcdRow1), "Reflow: %-7s%4dC", reflowState,
-             displayTemp);
+    // Indicator slot between colon and state:
+    //   ' ' idle / not heating
+    //   '*' heating commanded
+    //   '?' ZX fallback active, idle
+    //   '!' ZX fallback active, heating
+    char heatChar = ZxFallbackActive ? (HeatingActive ? '!' : '?')
+                                     : (HeatingActive ? '*' : ' ');
+    snprintf(lcdRow1, sizeof(lcdRow1), "Reflow:%c%-7s%4dC", heatChar,
+             reflowState, displayTemp);
     if (memcmp(lcdRow1, prevRow1, 20) != 0) {
       LCD_SetCursorPosition(&LCD, row1Pos);
       LCD_WriteString(&LCD, lcdRow1, 20);
@@ -587,63 +618,69 @@ int main(void) {
 }
 
 /**
- * @brief System Clock Configuration
- * @retval None
- */
-void SystemClock_Config(void) {
+  * @brief System Clock Configuration
+  * @retval None
+  */
+void SystemClock_Config(void)
+{
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
 
   /** Initializes the RCC Oscillators according to the specified parameters
-   * in the RCC_OscInitTypeDef structure.
-   */
+  * in the RCC_OscInitTypeDef structure.
+  */
   RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
-  RCC_OscInitStruct.HSEState       = RCC_HSE_ON;
-  RCC_OscInitStruct.PLL.PLLState   = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL.PLLSource  = RCC_PLLSOURCE_HSE;
-  RCC_OscInitStruct.PLL.PLLMUL     = RCC_PLL_MUL6;
-  RCC_OscInitStruct.PLL.PREDIV     = RCC_PREDIV_DIV1;
-  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK) {
+  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+  RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL6;
+  RCC_OscInitStruct.PLL.PREDIV = RCC_PREDIV_DIV1;
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+  {
     Error_Handler();
   }
 
   /** Initializes the CPU, AHB and APB buses clocks
-   */
-  RCC_ClkInitStruct.ClockType =
-      RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK | RCC_CLOCKTYPE_PCLK1;
-  RCC_ClkInitStruct.SYSCLKSource   = RCC_SYSCLKSOURCE_PLLCLK;
-  RCC_ClkInitStruct.AHBCLKDivider  = RCC_SYSCLK_DIV1;
+  */
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                              |RCC_CLOCKTYPE_PCLK1;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
 
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_1) != HAL_OK) {
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_1) != HAL_OK)
+  {
     Error_Handler();
   }
 }
 
 /**
- * @brief NVIC Configuration.
- * @retval None
- */
-static void MX_NVIC_Init(void) {
+  * @brief NVIC Configuration.
+  * @retval None
+  */
+static void MX_NVIC_Init(void)
+{
   /* TIM14_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(TIM14_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(TIM14_IRQn);
   /* SPI1_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(SPI1_IRQn, 1, 0);
   HAL_NVIC_EnableIRQ(SPI1_IRQn);
-  /* EXTI4_15_IRQn interrupt configuration - priority only, enable later */
+  /* EXTI4_15_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(EXTI4_15_IRQn, 3, 0);
+  HAL_NVIC_EnableIRQ(EXTI4_15_IRQn);
   /* TIM17_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(TIM17_IRQn, 2, 0);
   HAL_NVIC_EnableIRQ(TIM17_IRQn);
 }
 
 /**
- * @brief SPI1 Initialization Function
- * @param None
- * @retval None
- */
-static void MX_SPI1_Init(void) {
+  * @brief SPI1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_SPI1_Init(void)
+{
 
   /* USER CODE BEGIN SPI1_Init 0 */
 
@@ -653,65 +690,70 @@ static void MX_SPI1_Init(void) {
 
   /* USER CODE END SPI1_Init 1 */
   /* SPI1 parameter configuration*/
-  hspi1.Instance               = SPI1;
-  hspi1.Init.Mode              = SPI_MODE_MASTER;
-  hspi1.Init.Direction         = SPI_DIRECTION_2LINES;
-  hspi1.Init.DataSize          = SPI_DATASIZE_8BIT;
-  hspi1.Init.CLKPolarity       = SPI_POLARITY_LOW;
-  hspi1.Init.CLKPhase          = SPI_PHASE_1EDGE;
-  hspi1.Init.NSS               = SPI_NSS_SOFT;
+  hspi1.Instance = SPI1;
+  hspi1.Init.Mode = SPI_MODE_MASTER;
+  hspi1.Init.Direction = SPI_DIRECTION_2LINES;
+  hspi1.Init.DataSize = SPI_DATASIZE_8BIT;
+  hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
+  hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
+  hspi1.Init.NSS = SPI_NSS_SOFT;
   hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_64;
-  hspi1.Init.FirstBit          = SPI_FIRSTBIT_MSB;
-  hspi1.Init.TIMode            = SPI_TIMODE_DISABLE;
-  hspi1.Init.CRCCalculation    = SPI_CRCCALCULATION_DISABLE;
-  hspi1.Init.CRCPolynomial     = 7;
-  hspi1.Init.CRCLength         = SPI_CRC_LENGTH_DATASIZE;
-  hspi1.Init.NSSPMode          = SPI_NSS_PULSE_DISABLE;
-  if (HAL_SPI_Init(&hspi1) != HAL_OK) {
+  hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
+  hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
+  hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
+  hspi1.Init.CRCPolynomial = 7;
+  hspi1.Init.CRCLength = SPI_CRC_LENGTH_DATASIZE;
+  hspi1.Init.NSSPMode = SPI_NSS_PULSE_DISABLE;
+  if (HAL_SPI_Init(&hspi1) != HAL_OK)
+  {
     Error_Handler();
   }
   /* USER CODE BEGIN SPI1_Init 2 */
   /* USER CODE END SPI1_Init 2 */
+
 }
 
 /**
- * @brief TIM3 Initialization Function
- * @param None
- * @retval None
- */
-static void MX_TIM3_Init(void) {
+  * @brief TIM3 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM3_Init(void)
+{
 
   /* USER CODE BEGIN TIM3_Init 0 */
 
   /* USER CODE END TIM3_Init 0 */
 
-  TIM_Encoder_InitTypeDef sConfig       = {0};
+  TIM_Encoder_InitTypeDef sConfig = {0};
   TIM_MasterConfigTypeDef sMasterConfig = {0};
 
   /* USER CODE BEGIN TIM3_Init 1 */
 
   /* USER CODE END TIM3_Init 1 */
-  htim3.Instance               = TIM3;
-  htim3.Init.Prescaler         = 0;
-  htim3.Init.CounterMode       = TIM_COUNTERMODE_UP;
-  htim3.Init.Period            = 300 * 4 + 1;
-  htim3.Init.ClockDivision     = TIM_CLOCKDIVISION_DIV1;
+  htim3.Instance = TIM3;
+  htim3.Init.Prescaler = 0;
+  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim3.Init.Period = 300 * 4 + 1;
+  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
-  sConfig.EncoderMode          = TIM_ENCODERMODE_TI12;
-  sConfig.IC1Polarity          = TIM_ICPOLARITY_FALLING;
-  sConfig.IC1Selection         = TIM_ICSELECTION_DIRECTTI;
-  sConfig.IC1Prescaler         = TIM_ICPSC_DIV1;
-  sConfig.IC1Filter            = 10;
-  sConfig.IC2Polarity          = TIM_ICPOLARITY_FALLING;
-  sConfig.IC2Selection         = TIM_ICSELECTION_DIRECTTI;
-  sConfig.IC2Prescaler         = TIM_ICPSC_DIV1;
-  sConfig.IC2Filter            = 10;
-  if (HAL_TIM_Encoder_Init(&htim3, &sConfig) != HAL_OK) {
+  sConfig.EncoderMode = TIM_ENCODERMODE_TI12;
+  sConfig.IC1Polarity = TIM_ICPOLARITY_FALLING;
+  sConfig.IC1Selection = TIM_ICSELECTION_DIRECTTI;
+  sConfig.IC1Prescaler = TIM_ICPSC_DIV1;
+  sConfig.IC1Filter = 10;
+  sConfig.IC2Polarity = TIM_ICPOLARITY_FALLING;
+  sConfig.IC2Selection = TIM_ICSELECTION_DIRECTTI;
+  sConfig.IC2Prescaler = TIM_ICPSC_DIV1;
+  sConfig.IC2Filter = 10;
+  if (HAL_TIM_Encoder_Init(&htim3, &sConfig) != HAL_OK)
+  {
     Error_Handler();
   }
   sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
-  sMasterConfig.MasterSlaveMode     = TIM_MASTERSLAVEMODE_DISABLE;
-  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK) {
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
+  {
     Error_Handler();
   }
   /* USER CODE BEGIN TIM3_Init 2 */
@@ -720,14 +762,54 @@ static void MX_TIM3_Init(void) {
     Error_Handler();
   }
   /* USER CODE END TIM3_Init 2 */
+
 }
 
 /**
- * @brief TIM14 Initialization Function
- * @param None
- * @retval None
- */
-static void MX_TIM14_Init(void) {
+  * @brief TIM6 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM6_Init(void)
+{
+
+  /* USER CODE BEGIN TIM6_Init 0 */
+
+  /* USER CODE END TIM6_Init 0 */
+
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  /* USER CODE BEGIN TIM6_Init 1 */
+
+  /* USER CODE END TIM6_Init 1 */
+  htim6.Instance = TIM6;
+  htim6.Init.Prescaler = 47;
+  htim6.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim6.Init.Period = 19999;
+  htim6.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
+  if (HAL_TIM_Base_Init(&htim6) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim6, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM6_Init 2 */
+
+  /* USER CODE END TIM6_Init 2 */
+
+}
+
+/**
+  * @brief TIM14 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM14_Init(void)
+{
 
   /* USER CODE BEGIN TIM14_Init 0 */
 
@@ -736,13 +818,14 @@ static void MX_TIM14_Init(void) {
   /* USER CODE BEGIN TIM14_Init 1 */
 
   /* USER CODE END TIM14_Init 1 */
-  htim14.Instance               = TIM14;
-  htim14.Init.Prescaler         = 4800 - 1;
-  htim14.Init.CounterMode       = TIM_COUNTERMODE_UP;
-  htim14.Init.Period            = 100 - 1;
-  htim14.Init.ClockDivision     = TIM_CLOCKDIVISION_DIV1;
+  htim14.Instance = TIM14;
+  htim14.Init.Prescaler = 4800 - 1;
+  htim14.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim14.Init.Period = 100 - 1;
+  htim14.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim14.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_Base_Init(&htim14) != HAL_OK) {
+  if (HAL_TIM_Base_Init(&htim14) != HAL_OK)
+  {
     Error_Handler();
   }
   /* USER CODE BEGIN TIM14_Init 2 */
@@ -751,14 +834,16 @@ static void MX_TIM14_Init(void) {
   }
 
   /* USER CODE END TIM14_Init 2 */
+
 }
 
 /**
- * @brief TIM17 Initialization Function
- * @param None
- * @retval None
- */
-static void MX_TIM17_Init(void) {
+  * @brief TIM17 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM17_Init(void)
+{
 
   /* USER CODE BEGIN TIM17_Init 0 */
 
@@ -767,27 +852,30 @@ static void MX_TIM17_Init(void) {
   /* USER CODE BEGIN TIM17_Init 1 */
 
   /* USER CODE END TIM17_Init 1 */
-  htim17.Instance               = TIM17;
-  htim17.Init.Prescaler         = 999;
-  htim17.Init.CounterMode       = TIM_COUNTERMODE_UP;
-  htim17.Init.Period            = 47999;
-  htim17.Init.ClockDivision     = TIM_CLOCKDIVISION_DIV1;
+  htim17.Instance = TIM17;
+  htim17.Init.Prescaler = 999;
+  htim17.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim17.Init.Period = 47999;
+  htim17.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim17.Init.RepetitionCounter = 0;
   htim17.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_Base_Init(&htim17) != HAL_OK) {
+  if (HAL_TIM_Base_Init(&htim17) != HAL_OK)
+  {
     Error_Handler();
   }
   /* USER CODE BEGIN TIM17_Init 2 */
 
   /* USER CODE END TIM17_Init 2 */
+
 }
 
 /**
- * @brief GPIO Initialization Function
- * @param None
- * @retval None
- */
-static void MX_GPIO_Init(void) {
+  * @brief GPIO Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_GPIO_Init(void)
+{
   GPIO_InitTypeDef GPIO_InitStruct = {0};
 
   /* GPIO Ports Clock Enable */
@@ -797,58 +885,53 @@ static void MX_GPIO_Init(void) {
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOC,
-                    GPIO_CS0_Pin | GPIO_CS1_Pin | GPIO_R1E_Pin | GPIO_R2E_Pin,
-                    GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOC, GPIO_CS0_Pin|GPIO_CS1_Pin|GPIO_R1E_Pin|GPIO_R2E_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB,
-                    GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_2 | GPIO_LCD_RS_Pin |
-                        GPIO_PIN_3 | GPIO_PIN_4 | GPIO_PIN_5 | GPIO_PIN_6 |
-                        GPIO_PIN_7 | GPIO_LCD_E_Pin | GPIO_LCD_RW_Pin,
-                    GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0|GPIO_PIN_1|GPIO_PIN_2|GPIO_LCD_RS_Pin
+                          |GPIO_PIN_3|GPIO_PIN_4|GPIO_PIN_5|GPIO_PIN_6
+                          |GPIO_PIN_7|GPIO_LCD_E_Pin|GPIO_LCD_RW_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIO_ZX_EN_GPIO_Port, GPIO_ZX_EN_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pins : GPIO_CS0_Pin GPIO_CS1_Pin GPIO_R1E_Pin GPIO_R2E_Pin */
-  GPIO_InitStruct.Pin =
-      GPIO_CS0_Pin | GPIO_CS1_Pin | GPIO_R1E_Pin | GPIO_R2E_Pin;
-  GPIO_InitStruct.Mode  = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull  = GPIO_NOPULL;
+  GPIO_InitStruct.Pin = GPIO_CS0_Pin|GPIO_CS1_Pin|GPIO_R1E_Pin|GPIO_R2E_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
   /*Configure GPIO pins : PB0 PB1 PB2 GPIO_LCD_RS_Pin
                            PB3 PB4 PB5 PB6
                            PB7 GPIO_LCD_E_Pin GPIO_LCD_RW_Pin */
-  GPIO_InitStruct.Pin = GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_2 | GPIO_LCD_RS_Pin |
-                        GPIO_PIN_3 | GPIO_PIN_4 | GPIO_PIN_5 | GPIO_PIN_6 |
-                        GPIO_PIN_7 | GPIO_LCD_E_Pin | GPIO_LCD_RW_Pin;
-  GPIO_InitStruct.Mode  = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull  = GPIO_NOPULL;
+  GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1|GPIO_PIN_2|GPIO_LCD_RS_Pin
+                          |GPIO_PIN_3|GPIO_PIN_4|GPIO_PIN_5|GPIO_PIN_6
+                          |GPIO_PIN_7|GPIO_LCD_E_Pin|GPIO_LCD_RW_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /*Configure GPIO pin : GPIO_BTN_Pin */
-  GPIO_InitStruct.Pin  = GPIO_BTN_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING; // Falling edge for button press
-                                               // (button pulls to ground)
-  GPIO_InitStruct.Pull = GPIO_NOPULL; // External pull-up resistor present
+  GPIO_InitStruct.Pin = GPIO_BTN_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIO_BTN_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : GPIO_ZX_EN_Pin */
-  GPIO_InitStruct.Pin   = GPIO_ZX_EN_Pin;
-  GPIO_InitStruct.Mode  = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull  = GPIO_NOPULL;
+  GPIO_InitStruct.Pin = GPIO_ZX_EN_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIO_ZX_EN_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : GPIO_ZX_DET_Pin */
-  GPIO_InitStruct.Pin  = GPIO_ZX_DET_Pin;
+  GPIO_InitStruct.Pin = GPIO_ZX_DET_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIO_ZX_DET_GPIO_Port, &GPIO_InitStruct);
+
 }
 
 /* USER CODE BEGIN 4 */
@@ -884,12 +967,16 @@ static void MX_LCD_1_Init(void) {
   LCD_Init(&LCD, &LCD_InitStruct);
 }
 
-static void MX_PID_Init(void) { PID_INT_Init(&reflowPid); }
-
-void        HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
   if (htim->Instance == TIM14) {
     HAL_GPIO_WritePin(GPIO_CS1_GPIO_Port, GPIO_CS1_Pin, GPIO_PIN_RESET);
     HAL_SPI_Receive_IT(&hspi1, tcSPIData, 4);
+  } else if (htim->Instance == TIM6) {
+    // ZX detector hasn't fired in ~20ms — declare it dead and take over the
+    // SSR control loop directly. Auto-clears as soon as ZX EXTI fires again
+    // (which pets the watchdog and resets ZxFallbackActive).
+    ZxFallbackActive = 1;
+    DriveHeaterCycle();
   } else if (htim->Instance == TIM17) {
     if (DoReflow) {
       const ReflowProfileSet_TypeDef *activeSet =
@@ -1052,10 +1139,11 @@ void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef *hspi) {
 /* USER CODE END 4 */
 
 /**
- * @brief  This function is executed in case of error occurrence.
- * @retval None
- */
-void Error_Handler(void) {
+  * @brief  This function is executed in case of error occurrence.
+  * @retval None
+  */
+void Error_Handler(void)
+{
   /* USER CODE BEGIN Error_Handler_Debug */
   /* User can add his own implementation to report the HAL error return state */
   __disable_irq();
@@ -1064,15 +1152,16 @@ void Error_Handler(void) {
   /* USER CODE END Error_Handler_Debug */
 }
 
-#ifdef USE_FULL_ASSERT
+#ifdef  USE_FULL_ASSERT
 /**
- * @brief  Reports the name of the source file and the source line number
- *         where the assert_param error has occurred.
- * @param  file: pointer to the source file name
- * @param  line: assert_param error line source number
- * @retval None
- */
-void assert_failed(uint8_t *file, uint32_t line) {
+  * @brief  Reports the name of the source file and the source line number
+  *         where the assert_param error has occurred.
+  * @param  file: pointer to the source file name
+  * @param  line: assert_param error line source number
+  * @retval None
+  */
+void assert_failed(uint8_t *file, uint32_t line)
+{
   /* USER CODE BEGIN 6 */
   /* User can add his own implementation to report the file name and line
      number,

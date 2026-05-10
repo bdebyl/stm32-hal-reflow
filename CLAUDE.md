@@ -137,6 +137,36 @@ The LCD shows:
 - **Target**: `stm32-hal-reflow`
 - **Toolchain**: ARM GCC
 - **HAL Library**: STM32F0xx HAL Driver
+- **Vendor HAL**: `STM32CubeF0` checked out at `Firmware/` as a submodule pinned
+  to `v1.11.6`. `Drivers/CMSIS` and `Drivers/STM32F0xx_HAL_Driver` are symlinks
+  into `Firmware/Drivers/`.
+
+## CubeMX regen survival checklist
+
+Each time `stm32-hal-reflow.ioc` is regenerated, CubeMX overwrites several
+files that we've hand-modified. The fixes below are already applied
+defensively (in `USER CODE` blocks where possible) but **verify** after every
+regen:
+
+1. **Button edge** (`MX_GPIO_Init`): CubeMX defaults `GPIO_BTN_Pin` (PC8) to
+   `GPIO_MODE_IT_RISING`. The hardware has an external pull-up so a press is
+   a **falling** edge. Re-init in `USER CODE BEGIN 2` of `main.c` already
+   handles this — confirm the override block is still present.
+2. **EXTI4_15 deferred enable** (`MX_NVIC_Init`): CubeMX adds
+   `HAL_NVIC_EnableIRQ(EXTI4_15_IRQn)` to `MX_NVIC_Init`, but spurious ZX/btn
+   triggers during boot can erroneously start a reflow (commit `2bac5bc`).
+   We immediately call `HAL_NVIC_DisableIRQ(EXTI4_15_IRQn)` in
+   `USER CODE BEGIN 2` and re-enable after the 1.5s settle delay.
+3. **HAL I2C module** (`stm32f0xx_hal_conf.h`): CubeMX re-enables
+   `HAL_I2C_MODULE_ENABLED` even though we don't use I2C (commit `459192c`
+   removed it for size). The I2C driver `.c` files end up back in the
+   Makefile but get GC'd by the linker, so this is mostly cosmetic.
+   Manual fix if size matters: comment out the `HAL_I2C_MODULE_ENABLED`
+   define in `Core/Inc/stm32f0xx_hal_conf.h` and remove I2C lines from
+   `Makefile` `C_SOURCES`.
+4. **Linker script naming**: CubeMX emits `STM32F051XX_FLASH.ld`; the older
+   `STM32F051R4Tx_FLASH.ld` is now unused. Both files have identical memory
+   layouts (16 KB flash, 8 KB RAM at 0x20000000).
 
 ## Future Enhancements
 
