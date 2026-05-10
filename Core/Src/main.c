@@ -78,9 +78,11 @@ static uint8_t             SystemReady =
 static uint8_t WaitingForStartTemp =
     0; // Flag to indicate waiting for start temperature
 
-static uint8_t  SelectedProfileIndex = 0; // Index user can change while idle
-static uint8_t  ActiveProfileIndex   = 0; // Snapshot taken at button press
-static uint16_t EncoderPrev          = 0; // Last debounced encoder count (0..300)
+static uint8_t  SelectedProfileIndex = 0;   // Index user can change while idle
+static uint8_t  ActiveProfileIndex   = 0;   // Snapshot taken at button press
+static uint16_t EncoderPrev          = 0;   // Last debounced encoder count (0..300)
+static uint8_t  EditingCustomPeak    = 0;   // 1 while user is dialing in custom peak
+static uint16_t CustomPeakTemp       = 235; // °C, range CUSTOM_PEAK_MIN..MAX
 
 // Lead-free profile (SnAgCu, e.g. SMD291SNL / NC191SNL50)
 // http://www.chipquik.com/datasheets/NC191SNL50.pdf
@@ -151,6 +153,14 @@ static const ReflowProfile_TypeDef ReflowPhases_Leaded[] = {
      .HoldTimeSeconds   = 0,
      .Type              = REFLOW_PHASE_RAMP}};
 
+// Custom profile: leaded-style soak (50->100->150°C, 30s + 90s) plus a
+// user-selectable peak between CUSTOM_PEAK_MIN..MAX. Held in BSS because the
+// peak segment is regenerated each time reflow starts.
+#define CUSTOM_PEAK_MIN  150
+#define CUSTOM_PEAK_MAX  300
+#define CUSTOM_PEAK_STEP 5
+static ReflowProfile_TypeDef ReflowPhases_Custom[4];
+
 static const ReflowProfileSet_TypeDef ReflowProfiles[] = {
     {.Name       = "Pb-Free",
      .Phases     = ReflowPhases_PbFree,
@@ -158,8 +168,12 @@ static const ReflowProfileSet_TypeDef ReflowProfiles[] = {
     {.Name       = "Leaded",
      .Phases     = ReflowPhases_Leaded,
      .PhaseCount = sizeof(ReflowPhases_Leaded) / sizeof(ReflowPhases_Leaded[0])},
+    {.Name       = "Custom",
+     .Phases     = ReflowPhases_Custom,
+     .PhaseCount = sizeof(ReflowPhases_Custom) / sizeof(ReflowPhases_Custom[0])},
 };
 #define NUM_REFLOW_PROFILES (sizeof(ReflowProfiles) / sizeof(ReflowProfiles[0]))
+#define CUSTOM_PROFILE_INDEX 2
 
 /* USER CODE END PV */
 
@@ -208,6 +222,35 @@ static uint8_t IsTemperatureWithinTolerance(int16_t current, int16_t target) {
     diff = -diff; // Absolute value
   return (diff <= TEMP_TOLERANCE);
 }
+
+// Regenerates the custom-profile array for a given peak. Soak segment is
+// fixed (matches leaded paste behavior); peak ramp uses ~1°C/s slope.
+static void BuildCustomProfile(uint16_t peak) {
+  ReflowPhases_Custom[0] = (ReflowProfile_TypeDef){
+      .StartTemperature  = 50,
+      .TargetTemperature = 100,
+      .RampTimeSeconds   = 30,
+      .HoldTimeSeconds   = 0,
+      .Type              = REFLOW_PHASE_RAMP};
+  ReflowPhases_Custom[1] = (ReflowProfile_TypeDef){
+      .StartTemperature  = 100,
+      .TargetTemperature = 150,
+      .RampTimeSeconds   = 90,
+      .HoldTimeSeconds   = 0,
+      .Type              = REFLOW_PHASE_RAMP};
+  ReflowPhases_Custom[2] = (ReflowProfile_TypeDef){
+      .StartTemperature  = 150,
+      .TargetTemperature = (int16_t)peak,
+      .RampTimeSeconds   = (uint16_t)(peak - 150), // 1°C/s slope
+      .HoldTimeSeconds   = 10,
+      .Type              = REFLOW_PHASE_RAMP};
+  ReflowPhases_Custom[3] = (ReflowProfile_TypeDef){
+      .StartTemperature  = (int16_t)peak,
+      .TargetTemperature = 50,
+      .RampTimeSeconds   = 0,
+      .HoldTimeSeconds   = 0,
+      .Type              = REFLOW_PHASE_RAMP};
+}
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
   if (GPIO_Pin == GPIO_BTN_Pin) {
     // Only process button if system is ready (prevents spurious triggers on
@@ -251,17 +294,27 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
      }
      */
     if (DoReflow == 0) {
-      // Start the reflow
-      DoReflow          = 1;
-      ActiveProfileIndex = SelectedProfileIndex; // Lock in selection for the run
-      OvenControlEnable = 1;
-      ReflowIndex       = 0;
-      ReflowTime        = 0;
-      ReflowState       = REFLOW_STATE_RAMPING;
-      HoldTimer         = 0;
-      WaitingForStartTemp =
-          1; // Wait for start temperature before beginning profile
-      HAL_TIM_Base_Start_IT(&htim17);
+      // First press on Custom drops into the peak-edit screen instead of
+      // starting; a subsequent press in edit mode commits and runs.
+      if (SelectedProfileIndex == CUSTOM_PROFILE_INDEX && !EditingCustomPeak) {
+        EditingCustomPeak = 1;
+      } else {
+        if (EditingCustomPeak) {
+          BuildCustomProfile(CustomPeakTemp);
+          EditingCustomPeak = 0;
+        }
+        // Start the reflow
+        DoReflow          = 1;
+        ActiveProfileIndex = SelectedProfileIndex; // Lock in selection for the run
+        OvenControlEnable = 1;
+        ReflowIndex       = 0;
+        ReflowTime        = 0;
+        ReflowState       = REFLOW_STATE_RAMPING;
+        HoldTimer         = 0;
+        WaitingForStartTemp =
+            1; // Wait for start temperature before beginning profile
+        HAL_TIM_Base_Start_IT(&htim17);
+      }
     }
   }
 
@@ -390,8 +443,10 @@ int main(void) {
   /* Mark system as ready for button input */
   SystemReady = 1;
 
-  char lcdRow1[21]; // 20 chars + null terminator
-  char lcdRow2[21]; // 20 chars + null terminator
+  char lcdRow1[21];        // 20 chars + null terminator
+  char lcdRow2[21];        // 20 chars + null terminator
+  char prevRow1[21] = {0}; // Last written contents; zero-init forces first draw
+  char prevRow2[21] = {0};
 
   LCD_PositionTypeDef row1Pos = {.Column = 0, .Row = LCD_ROW_1};
   LCD_PositionTypeDef row2Pos = {.Column = 0, .Row = LCD_ROW_2};
@@ -407,24 +462,36 @@ int main(void) {
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    // Profile selection via rotary encoder (only when idle).
-    // TIM3 is in encoder mode TI12 (4 counts per detent) with period 1201,
-    // so >> 2 yields a 0..300 detent index that wraps at the boundaries.
+    // Encoder polling. TIM3 is in encoder mode TI12 (4 counts per detent) with
+    // period 1201, so >> 2 yields a 0..300 detent index that wraps at the
+    // boundaries. While idle, encoder either cycles the profile selection or
+    // adjusts the custom-profile peak temperature, depending on edit mode.
     uint16_t encNow = (uint16_t)(__HAL_TIM_GET_COUNTER(&htim3) >> 2);
     if (!DoReflow) {
-      int16_t delta = (int16_t)encNow - (int16_t)EncoderPrev;
+      // Inverted so CW = increment (matches knob orientation on the panel)
+      int16_t delta = (int16_t)EncoderPrev - (int16_t)encNow;
       // Resolve wrap-around at the 0/300 boundary
       if (delta > 150)
         delta -= 301;
       if (delta < -150)
         delta += 301;
       if (delta != 0) {
-        int16_t idx = (int16_t)SelectedProfileIndex + delta;
-        idx = ((idx % (int16_t)NUM_REFLOW_PROFILES) +
-               (int16_t)NUM_REFLOW_PROFILES) %
-              (int16_t)NUM_REFLOW_PROFILES;
-        SelectedProfileIndex = (uint8_t)idx;
-        EncoderPrev          = encNow;
+        if (EditingCustomPeak) {
+          int32_t newPeak =
+              (int32_t)CustomPeakTemp + (int32_t)delta * CUSTOM_PEAK_STEP;
+          if (newPeak < CUSTOM_PEAK_MIN)
+            newPeak = CUSTOM_PEAK_MIN;
+          if (newPeak > CUSTOM_PEAK_MAX)
+            newPeak = CUSTOM_PEAK_MAX;
+          CustomPeakTemp = (uint16_t)newPeak;
+        } else {
+          int16_t idx = (int16_t)SelectedProfileIndex + delta;
+          idx = ((idx % (int16_t)NUM_REFLOW_PROFILES) +
+                 (int16_t)NUM_REFLOW_PROFILES) %
+                (int16_t)NUM_REFLOW_PROFILES;
+          SelectedProfileIndex = (uint8_t)idx;
+        }
+        EncoderPrev = encNow;
       }
     } else {
       // Re-anchor while running so post-run state matches physical knob position
@@ -443,8 +510,11 @@ int main(void) {
       displayTemp = 999;
     snprintf(lcdRow1, sizeof(lcdRow1), "Reflow: %-7s%4dC", reflowState,
              displayTemp);
-    LCD_SetCursorPosition(&LCD, row1Pos);
-    LCD_WriteString(&LCD, lcdRow1, 20); // Always write exactly 20 characters
+    if (memcmp(lcdRow1, prevRow1, 20) != 0) {
+      LCD_SetCursorPosition(&LCD, row1Pos);
+      LCD_WriteString(&LCD, lcdRow1, 20);
+      memcpy(prevRow1, lcdRow1, 20);
+    }
 
     // Second row: Phase name, segment progress, and right-aligned setpoint
     const char *phaseName;
@@ -471,9 +541,15 @@ int main(void) {
 
     // Format row 2 based on state
     if (!DoReflow) {
-      // IDLE state: Show currently selected profile name
-      snprintf(lcdRow2, sizeof(lcdRow2), "Sel: %-15s",
-               ReflowProfiles[SelectedProfileIndex].Name);
+      if (EditingCustomPeak) {
+        // Edit screen: encoder dials peak temp, button press starts reflow.
+        snprintf(lcdRow2, sizeof(lcdRow2), "Peak: %3dC  PRESS GO",
+                 (int)CustomPeakTemp);
+      } else {
+        // IDLE state: Show currently selected profile name
+        snprintf(lcdRow2, sizeof(lcdRow2), "Sel: %-15s",
+                 ReflowProfiles[SelectedProfileIndex].Name);
+      }
     } else {
       // Active reflow: Show "PHASE [x/y]      123C"
       int phaseLen = strlen(phaseName) + strlen(segmentStr);
@@ -500,9 +576,12 @@ int main(void) {
       }
     }
 
-    LCD_SetCursorPosition(&LCD, row2Pos);
-    LCD_WriteString(&LCD, lcdRow2, 20); // Always write exactly 20 characters
-    HAL_Delay(200);
+    if (memcmp(lcdRow2, prevRow2, 20) != 0) {
+      LCD_SetCursorPosition(&LCD, row2Pos);
+      LCD_WriteString(&LCD, lcdRow2, 20);
+      memcpy(prevRow2, lcdRow2, 20);
+    }
+    HAL_Delay(20); // 50 Hz poll for snappy encoder; renders only on row change
   }
   /* USER CODE END 3 */
 }
