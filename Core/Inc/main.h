@@ -55,6 +55,12 @@ typedef enum {
   REFLOW_STATE_HOLDING,     // Currently holding at target
   REFLOW_STATE_COMPLETE     // Phase complete, ready for next
 } ReflowState_TypeDef;
+
+typedef struct {
+  const char                  *Name;       // Short label for LCD (<= 8 chars)
+  const ReflowProfile_TypeDef *Phases;     // Pointer to phase array
+  uint8_t                      PhaseCount; // Number of phases in array
+} ReflowProfileSet_TypeDef;
 /* USER CODE END ET */
 
 /* Exported constants --------------------------------------------------------*/

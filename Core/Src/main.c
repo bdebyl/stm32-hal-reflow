@@ -78,9 +78,13 @@ static uint8_t             SystemReady =
 static uint8_t WaitingForStartTemp =
     0; // Flag to indicate waiting for start temperature
 
+static uint8_t  SelectedProfileIndex = 0; // Index user can change while idle
+static uint8_t  ActiveProfileIndex   = 0; // Snapshot taken at button press
+static uint16_t EncoderPrev          = 0; // Last debounced encoder count (0..300)
+
+// Lead-free profile (SnAgCu, e.g. SMD291SNL / NC191SNL50)
 // http://www.chipquik.com/datasheets/NC191SNL50.pdf
-// Enhanced reflow profile with ramp and hold phases
-static ReflowProfile_TypeDef ReflowProfile[] = {
+static const ReflowProfile_TypeDef ReflowPhases_PbFree[] = {
     // Preheat ramp: 50°C to 150°C over 90 seconds
     {.StartTemperature  = 50,
      .TargetTemperature = 150,
@@ -111,6 +115,51 @@ static ReflowProfile_TypeDef ReflowProfile[] = {
      .RampTimeSeconds   = 0,
      .HoldTimeSeconds   = 0,
      .Type              = REFLOW_PHASE_RAMP}};
+
+// Leaded profile (Sn63/Pb37, e.g. SMD291AX)
+// X-axis times: 30s -> 100°C, 120s -> 150°C, 150s -> 183°C, 210s -> 235°C
+// (hold 10s), cool by 240s.
+static const ReflowProfile_TypeDef ReflowPhases_Leaded[] = {
+    // Preheat: 50°C to 100°C over 30 seconds
+    {.StartTemperature  = 50,
+     .TargetTemperature = 100,
+     .RampTimeSeconds   = 30,
+     .HoldTimeSeconds   = 0,
+     .Type              = REFLOW_PHASE_RAMP},
+    // Soak ramp: 100°C to 150°C over 90 seconds
+    {.StartTemperature  = 100,
+     .TargetTemperature = 150,
+     .RampTimeSeconds   = 90,
+     .HoldTimeSeconds   = 0,
+     .Type              = REFLOW_PHASE_RAMP},
+    // Activation: 150°C to 183°C over 30 seconds (crosses Sn63/Pb37 eutectic)
+    {.StartTemperature  = 150,
+     .TargetTemperature = 183,
+     .RampTimeSeconds   = 30,
+     .HoldTimeSeconds   = 0,
+     .Type              = REFLOW_PHASE_RAMP},
+    // Reflow peak: 183°C to 235°C over 60 seconds, hold for 10 seconds
+    {.StartTemperature  = 183,
+     .TargetTemperature = 235,
+     .RampTimeSeconds   = 60,
+     .HoldTimeSeconds   = 10,
+     .Type              = REFLOW_PHASE_RAMP},
+    // Cooling: Let natural cooling take over
+    {.StartTemperature  = 235,
+     .TargetTemperature = 50,
+     .RampTimeSeconds   = 0,
+     .HoldTimeSeconds   = 0,
+     .Type              = REFLOW_PHASE_RAMP}};
+
+static const ReflowProfileSet_TypeDef ReflowProfiles[] = {
+    {.Name       = "Pb-Free",
+     .Phases     = ReflowPhases_PbFree,
+     .PhaseCount = sizeof(ReflowPhases_PbFree) / sizeof(ReflowPhases_PbFree[0])},
+    {.Name       = "Leaded",
+     .Phases     = ReflowPhases_Leaded,
+     .PhaseCount = sizeof(ReflowPhases_Leaded) / sizeof(ReflowPhases_Leaded[0])},
+};
+#define NUM_REFLOW_PROFILES (sizeof(ReflowProfiles) / sizeof(ReflowProfiles[0]))
 
 /* USER CODE END PV */
 
@@ -204,6 +253,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
     if (DoReflow == 0) {
       // Start the reflow
       DoReflow          = 1;
+      ActiveProfileIndex = SelectedProfileIndex; // Lock in selection for the run
       OvenControlEnable = 1;
       ReflowIndex       = 0;
       ReflowTime        = 0;
@@ -340,12 +390,15 @@ int main(void) {
   /* Mark system as ready for button input */
   SystemReady = 1;
 
-  char          lcdRow1[21]; // 20 chars + null terminator
-  char          lcdRow2[21]; // 20 chars + null terminator
-  const uint8_t totalPhases = sizeof(ReflowProfile) / sizeof(ReflowProfile[0]);
+  char lcdRow1[21]; // 20 chars + null terminator
+  char lcdRow2[21]; // 20 chars + null terminator
 
   LCD_PositionTypeDef row1Pos = {.Column = 0, .Row = LCD_ROW_1};
   LCD_PositionTypeDef row2Pos = {.Column = 0, .Row = LCD_ROW_2};
+
+  // Anchor encoder reading to current physical position so first idle poll
+  // doesn't see a phantom delta from boot-time CNT initialization.
+  EncoderPrev = (uint16_t)(__HAL_TIM_GET_COUNTER(&htim3) >> 2);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -354,6 +407,32 @@ int main(void) {
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    // Profile selection via rotary encoder (only when idle).
+    // TIM3 is in encoder mode TI12 (4 counts per detent) with period 1201,
+    // so >> 2 yields a 0..300 detent index that wraps at the boundaries.
+    uint16_t encNow = (uint16_t)(__HAL_TIM_GET_COUNTER(&htim3) >> 2);
+    if (!DoReflow) {
+      int16_t delta = (int16_t)encNow - (int16_t)EncoderPrev;
+      // Resolve wrap-around at the 0/300 boundary
+      if (delta > 150)
+        delta -= 301;
+      if (delta < -150)
+        delta += 301;
+      if (delta != 0) {
+        int16_t idx = (int16_t)SelectedProfileIndex + delta;
+        idx = ((idx % (int16_t)NUM_REFLOW_PROFILES) +
+               (int16_t)NUM_REFLOW_PROFILES) %
+              (int16_t)NUM_REFLOW_PROFILES;
+        SelectedProfileIndex = (uint8_t)idx;
+        EncoderPrev          = encNow;
+      }
+    } else {
+      // Re-anchor while running so post-run state matches physical knob position
+      EncoderPrev = encNow;
+    }
+
+    const uint8_t totalPhases = ReflowProfiles[ActiveProfileIndex].PhaseCount;
+
     // First row: "Reflow: OFF/ON" with right-aligned temperature
     const char *reflowState = DoReflow ? "ON " : "OFF";
     // Clamp temperature to display range to prevent truncation warnings
@@ -392,8 +471,9 @@ int main(void) {
 
     // Format row 2 based on state
     if (!DoReflow) {
-      // IDLE state: Just show "IDLE" with no temperature or segment info
-      snprintf(lcdRow2, sizeof(lcdRow2), "%-20s", "IDLE");
+      // IDLE state: Show currently selected profile name
+      snprintf(lcdRow2, sizeof(lcdRow2), "Sel: %-15s",
+               ReflowProfiles[SelectedProfileIndex].Name);
     } else {
       // Active reflow: Show "PHASE [x/y]      123C"
       int phaseLen = strlen(phaseName) + strlen(segmentStr);
@@ -733,8 +813,11 @@ void        HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
     HAL_SPI_Receive_IT(&hspi1, tcSPIData, 4);
   } else if (htim->Instance == TIM17) {
     if (DoReflow) {
+      const ReflowProfileSet_TypeDef *activeSet =
+          &ReflowProfiles[ActiveProfileIndex];
+
       // Check if we've completed all profile stages
-      if (ReflowIndex >= (sizeof(ReflowProfile) / sizeof(ReflowProfile[0]))) {
+      if (ReflowIndex >= activeSet->PhaseCount) {
         // Stop the reflow
         DoReflow            = 0;
         OvenControlEnable   = 0;
@@ -748,7 +831,7 @@ void        HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
         return;
       }
 
-      ReflowProfile_TypeDef currentProfile = ReflowProfile[ReflowIndex];
+      ReflowProfile_TypeDef currentProfile = activeSet->Phases[ReflowIndex];
 
       // Check if we need to wait for start temperature before beginning profile
       if (WaitingForStartTemp) {
